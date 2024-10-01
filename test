@@ -1,26 +1,41 @@
-import pandas as pd
+import csv
 
-# Đọc dữ liệu từ file CSV
-file_path = 'acceleration_data.csv'
-data = pd.read_csv(file_path)
+# Đường dẫn file CSV và file Punch
+csv_file_real = 'real_acceleration_data.csv'
+csv_file_imaginary = 'imaginary_acceleration_data.csv'
+punch_file = 'acceleration_output.pch'
 
-# Tạo file punch
-punch_file_path = 'acceleration_output.pch'
-with open(punch_file_path, 'w') as f:
-    f.write('$ ACCELERATIONS (REAL)\n')
+# Tạo dictionary để lưu dữ liệu gia tốc phần thực
+real_data = {}
+with open(csv_file_real, 'r') as csvf:
+    reader = csv.reader(csvf)
+    header = next(reader)  # Bỏ qua tiêu đề cột
+    for row in reader:
+        node_id = int(row[0])      # Node ID
+        dof = row[1]               # Degree of Freedom (DOF)
+        real_part = row[2]         # Phần thực của gia tốc
+        real_data[(node_id, dof)] = real_part
+
+# Mở file Punch và ghi dữ liệu
+with open(punch_file, 'w') as punchf:
+    # Ghi phần tiêu đề của punch file
+    punchf.write('$ACCELERATIONS (REAL)\n')
     
-    # Ghi giá trị thực vào file punch
-    for index, row in data.iterrows():
-        frequency = row['Frequency']
-        real_value = row['Real']
-        f.write(f'{index+1:>8} {1:<6} {real_value:>20.6E}\n')  # Cột ID là index+1, DOF = 1
+    # Ghi dữ liệu phần thực
+    for (node_id, dof), real_part in real_data.items():
+        punchf.write(f'{node_id:>8} {dof:<6} {real_part:>20}\n')
 
-    f.write('$ ACCELERATIONS (IMAGINARY)\n')
+    # Ghi phần tiêu đề cho phần ảo
+    punchf.write('$ACCELERATIONS (IMAGINARY)\n')
     
-    # Ghi giá trị ảo vào file punch
-    for index, row in data.iterrows():
-        frequency = row['Frequency']
-        imaginary_value = row['Imaginary']
-        f.write(f'{index+1:>8} {1:<6} {imaginary_value:>20.6E}\n')  # Cột ID là index+1, DOF = 1
+    # Ghi dữ liệu phần ảo
+    with open(csv_file_imaginary, 'r') as csvf_imaginary:
+        reader = csv.reader(csvf_imaginary)
+        header = next(reader)  # Bỏ qua tiêu đề cột
+        for row in reader:
+            node_id = int(row[0])      # Node ID
+            dof = row[1]               # Degree of Freedom (DOF)
+            imaginary_part = row[2]    # Phần ảo của gia tốc
+            punchf.write(f'{node_id:>8} {dof:<6} {imaginary_part:>20}\n')
 
-print(f'File punch đã được tạo thành công tại: {punch_file_path}')
+print(f'File Punch đã được tạo: {punch_file}')
