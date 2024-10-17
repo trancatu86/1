@@ -1,1 +1,23 @@
-https://suzukimotorcorporation.box.com/s/7zdsgfm4ayfiaaxm3vsk5ds9wgpkgbfd
+Sub ReadCSVToExcel()
+    Dim ws As Worksheet
+    Dim fileName As String
+    
+    ' Xác định sheet mà bạn muốn nhập dữ liệu
+    Set ws = ThisWorkbook.Sheets("Sheet1") ' Thay thế "Sheet1" bằng tên sheet của bạn
+    
+    ' Mở hộp thoại để chọn file CSV
+    fileName = Application.GetOpenFilename("CSV Files (*.csv), *.csv")
+    
+    ' Nếu người dùng không chọn file, thoát sub
+    If fileName = "False" Then Exit Sub
+    
+    ' Sử dụng phương thức QueryTables để nhập file CSV vào Excel
+    With ws.QueryTables.Add(Connection:="TEXT;" & fileName, Destination:=ws.Range("A1"))
+        .TextFileParseType = xlDelimited
+        .TextFileCommaDelimiter = True
+        .TextFileColumnDataTypes = Array(1) ' Định nghĩa kiểu dữ liệu của các cột (1 là General)
+        .Refresh BackgroundQuery:=False
+    End With
+    
+    MsgBox "Dữ liệu CSV đã được nhập thành công!"
+End Sub
