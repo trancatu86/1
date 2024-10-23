@@ -1,43 +1,12 @@
-Sub ImportCSVToExcel()
-    ' Declare variables
-    Dim ws As Worksheet
-    Dim csvFilePath As String
-    Dim lineText As String
-    Dim rowNumber As Long
-    Dim colNumber As Long
-    Dim fileNum As Integer
-    Dim cellValue As String
-    Dim i As Long
+folder
+https://suzukimotorcorporation.box.com/s/ul9duif5n339sglc4oe1wr44ig2mx1ny
 
-    ' Specify the CSV file path (update the path accordingly)
-    csvFilePath = "C:\path_to_your_file\yourfile.csv"
-    
-    ' Open the CSV file
-    fileNum = FreeFile
-    Open csvFilePath For Input As fileNum
-    
-    ' Add a new worksheet
-    Set ws = ThisWorkbook.Sheets.Add
-    ws.Name = "ImportedCSV"
-    
-    rowNumber = 1
-    ' Loop through each line in the CSV file
-    Do Until EOF(fileNum)
-        Line Input #fileNum, lineText
-        colNumber = 1
-        
-        ' Split the line into values based on comma (CSV)
-        For i = LBound(Split(lineText, ",")) To UBound(Split(lineText, ","))
-            cellValue = Split(lineText, ",")(i)
-            ws.Cells(rowNumber, colNumber).Value = cellValue
-            colNumber = colNumber + 1
-        Next i
-        
-        rowNumber = rowNumber + 1
-    Loop
-    
-    ' Close the CSV file
-    Close fileNum
-    
-    MsgBox "CSV file imported successfully!"
-End Sub
+
+tool expla
+https://suzukimotorcorporation.box.com/s/ij39aiv7jyrvwke7phvtehrtzar0ke6s
+
+Conver
+https://suzukimotorcorporation.box.com/s/o679477e2uc42sxu3t94r6hhct9q2e2y
+
+unv 
+https://suzukimotorcorporation.box.com/s/vvkwk2wc7rgupcnyv1ca45jjmnb0u7xi
