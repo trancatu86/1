@@ -1,11 +1,34 @@
-Siemenのマイク位置とCAEのマイク位置の音響感度比較の資料：
-https://suzukimotorcorporation.box.com/s/s3c32tmql5vne7f3a67pdkwrxtfkoe78
+Private Sub Worksheet_Change(ByVal Target As Range)
+    Dim ws1 As Worksheet, ws2 As Worksheet, ws3 As Worksheet, ws4 As Worksheet
+    Dim checkCell As Range
 
-Nastranヘッダーファイル出力ツール(FFFTPに投入と計算実行の版)
-https://suzukimotorcorporation.box.com/s/7udjo3b0f1ssj42azbq2cbe6t8kwfcl6
+    ' Xác định ô cần kiểm tra (thay đổi A1 thành ô bạn muốn theo dõi)
+    Set checkCell = Me.Range("A1")
 
-周波数刻みを変更ツール：
-https://suzukimotorcorporation.box.com/s/uuhod4znfmn9bix2rxccjha8wtlqimsq
+    ' Xác định các sheet
+    Set ws1 = ThisWorkbook.Sheets("Sheet1")
+    Set ws2 = ThisWorkbook.Sheets("Sheet2")
+    Set ws3 = ThisWorkbook.Sheets("Sheet3")
+    Set ws4 = ThisWorkbook.Sheets("Sheet4")
 
-Best regards,
-Nagato
+    ' Kiểm tra xem ô được thay đổi có phải là ô cần kiểm tra không
+    If Not Intersect(Target, checkCell) Is Nothing Then
+        Application.EnableEvents = False ' Ngăn vòng lặp vô hạn
+
+        ' Nếu giá trị ô là "a"
+        If LCase(checkCell.Value) = "a" Then
+            ws1.Visible = xlSheetVisible ' Hiển thị Sheet1
+            ws2.Visible = xlSheetVisible ' Hiển thị Sheet2
+            ws3.Visible = xlSheetHidden  ' Ẩn Sheet3
+            ws4.Visible = xlSheetHidden  ' Ẩn Sheet4
+        Else
+            ' Khôi phục trạng thái mặc định nếu giá trị không phải "a"
+            ws1.Visible = xlSheetHidden
+            ws2.Visible = xlSheetHidden
+            ws3.Visible = xlSheetVisible
+            ws4.Visible = xlSheetVisible
+        End If
+
+        Application.EnableEvents = True ' Bật lại sự kiện
+    End If
+End Sub
