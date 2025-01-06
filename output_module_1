@@ -1,0 +1,159 @@
+Sub Button1_Click()
+
+
+i = 0
+temp = ""
+' find FREQ1, RLOAD1, DAREA, GRID and add commer ","
+Do While Worksheets("Export").Cells(1 + i, 1).Value <> ""
+    strtemp = ""
+    Row = Worksheets("Export").Cells(1 + i, 1).Value
+    SpacePos = InStr(1, Row, " ")
+    
+    If SpacePos = 0 Then
+        Worksheets("Export").Cells(1 + i, 7).Value = ""
+    Else
+        temp = Left(Row, SpacePos - 1)
+'        Worksheets("Export").Cells(1 + i, 7).Value = temp
+
+        If temp = "FREQ1" Or temp = "GRID" Or temp = "CELAS2" Or temp = "CDAMP2" Then
+            Row_item = Split(Row, " ")
+    
+            Row_len = UBound(Row_item) - LBound(Row_item) + 1
+    '        Worksheets("Export").Cells(1 + i, 7).Value = Sentence_len
+            For j = 0 To Row_len - 1: 'check response point
+                k = 0
+                Do While Worksheets("Export").Cells(2 + k, 3).Value <> ""
+                    If Row_item(j) = Worksheets("Export").Cells(2 + k, 3).Value Then
+                        Row_item(j) = CStr(Worksheets("Export").Cells(2 + k, 4).Value)
+                    End If
+                    k = k + 1
+                Loop
+                
+                If Row_item(j) <> "" Then
+                    Worksheets("Export").Cells(1 + i, 7).Value = strtemp & "," & Row_item(j)
+                    strtemp = Worksheets("Export").Cells(1 + i, 7).Value
+                End If
+            Next j
+            Worksheets("Export").Cells(1 + i, 7).Value = Mid(strtemp, 2)
+        End If
+        
+    End If
+
+    i = i + 1
+Loop
+
+
+Worksheets("Export").Cells(1, 7).Value = "$" & CStr(Worksheets("Export").Cells(2, 10).Value)
+
+i = 0
+Do While Worksheets("Export").Cells(2 + i, 1).Value <> "ENDDATA"
+    If Worksheets("Export").Cells(2 + i, 7).Value = "" Then
+        Worksheets("Export").Cells(2 + i, 7).Value = Worksheets("Export").Cells(2 + i, 1).Value
+    End If
+    i = i + 1
+Loop
+' pick up parameter name
+
+' replace new value
+
+' add to exporting column
+
+' export to *.dat file
+
+
+
+End Sub
+
+Sub export_output(sheetname As String, file_name As String)
+
+Dim path_1 As String
+Path = ActiveWorkbook.Path
+
+folder_path = Path & "\\UploadFFFTP_Run\\Output"
+If Dir(folder_path, vbDirectory) = "" Then
+    MkDir folder_path
+End If
+
+path_1 = folder_path & "\\" & file_name
+SaveColumn sheetname, "G", path_1
+
+
+
+End Sub
+
+
+Sub SaveColumn(sheetname As String, columnName As String, fileName As String)
+
+  Dim cell
+  Dim FSO
+  Dim file
+  t = 0
+  Set FSO = CreateObject("Scripting.FileSystemObject")
+  Set file = FSO.CreateTextFile(fileName, True)
+  For Each cell In Sheets(sheetname).Columns(columnName).Cells
+    t = 0
+    If cell.Value <> "" Then
+        file.WriteLine cell.Value
+    End If
+  Next
+  file.Close
+
+  Set file = Nothing
+  Set FSO = Nothing
+  
+End Sub
+Sub Button2_Click()
+Dim fileName As String
+fileName = CStr(Worksheets("Export").Cells(2, 10).Value)
+Call export_output("Export", fileName)
+
+
+Dim path_1 As String
+Path = ActiveWorkbook.Path
+
+folder_path = Path & "\\UploadFFFTP_Run\\Output"
+path_1 = folder_path & "\\" & "user_parameter.csv"
+
+i = 0
+Do While Worksheets("Export").Cells(i + 1, 9).Value <> ""
+    Worksheets("Submit").Cells(i + 1, 3).Value = CStr(Worksheets("Export").Cells(i + 1, 9).Value) & "," & Worksheets("Export").Cells(i + 1, 10).Value
+    i = i + 1
+Loop
+
+
+i = 0
+Do While Worksheets("Submit").Cells(i + 1, 1).Value <> ""
+    Worksheets("Submit").Cells(i + 3, 3).Value = Worksheets("Submit").Cells(i + 1, 1).Value & "," & Worksheets("Submit").Cells(i + 1, 2).Value
+    i = i + 1
+Loop
+SaveColumn "Submit", "C", path_1
+'Worksheets("Submit").Columns("C").Value = ""
+
+
+End Sub
+
+
+Sub ボタン4_Click()
+
+Dim shellobject As Object
+
+Path = ActiveWorkbook.Path
+
+Set shellobject = CreateObject("WScript.Shell")
+
+workingdir = Path & "\UploadFFFTP_Run"
+
+shellobject.currentdirectory = workingdir
+
+
+
+batFilePath = workingdir & "\Upload_Solve.cmd"
+
+shellResult = Shell(batFilePath, vbNormalFocus)
+
+End Sub
+
+
+Sub ボタン2_Click()
+Worksheets("Export").Columns("G").ClearContents
+End Sub
