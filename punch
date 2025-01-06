@@ -1,0 +1,561 @@
+$TITLE   =16DOF-SWIFT-FRF                                                      1
+$SUBTITLE=                                                                     2
+$LABEL   =(TON,MM,N,S)                                                         3
+$ACCELERATION                                                                  4
+$REAL-IMAGINARY OUTPUT                                                         5
+$SUBCASE ID =           1                                                      6
+$FREQUENCY =   5.0000000E-01                                                   7
+        70       G     -1.901878E-07      1.971680E-05      5.266962E-06       8
+-CONT-                 -1.875737E-07      1.054266E-08      3.353751E-09       9
+-CONT-                 -4.106231E-07      2.604324E-05      9.749607E-06      10
+-CONT-                 -2.825957E-07      2.004630E-08      6.359574E-09      11
+$TITLE   =16DOF-SWIFT-FRF                                                     12
+$SUBTITLE=                                                                    13
+$LABEL   =(TON,MM,N,S)                                                        14
+$ACCELERATION                                                                 15
+$REAL-IMAGINARY OUTPUT                                                        16
+$SUBCASE ID =           1                                                     17
+$FREQUENCY =   1.0000000E+00                                                  18
+        70       G     -6.550528E-07      2.145538E-04      5.325413E-05      19
+-CONT-                 -1.789566E-06      8.799766E-08      2.426057E-08      20
+-CONT-                 -1.525324E-06      7.212785E-05      4.197268E-05      21
+-CONT-                 -9.376092E-07      8.053842E-08      2.589446E-08      22
+$TITLE   =16DOF-SWIFT-FRF                                                     23
+$SUBTITLE=                                                                    24
+$LABEL   =(TON,MM,N,S)                                                        25
+$ACCELERATION                                                                 26
+$REAL-IMAGINARY OUTPUT                                                        27
+$SUBCASE ID =           1                                                     28
+$FREQUENCY =   1.5000000E+00                                                  29
+        70       G     -5.322116E-06      9.782396E-04      1.164897E-04      30
+-CONT-                 -7.640243E-06      2.719281E-07      7.922553E-08      31
+-CONT-                 -9.851000E-06     -4.193422E-04      5.730302E-06      32
+-CONT-                  1.038454E-06      1.449588E-07      7.633699E-08      33
+$TITLE   =16DOF-SWIFT-FRF                                                     34
+$SUBTITLE=                                                                    35
+$LABEL   =(TON,MM,N,S)                                                        36
+$ACCELERATION                                                                 37
+$REAL-IMAGINARY OUTPUT                                                        38
+$SUBCASE ID =           1                                                     39
+$FREQUENCY =   2.0000000E+00                                                  40
+        70       G     -1.837740E-05      1.137089E-05      2.547632E-04      41
+-CONT-                 -6.064748E-06      6.418938E-07      2.737404E-07      42
+-CONT-                 -2.160065E-05     -2.831059E-03      9.663698E-05      43
+-CONT-                  1.480699E-05      2.801923E-07      1.606517E-07      44
+$TITLE   =16DOF-SWIFT-FRF                                                     45
+$SUBTITLE=                                                                    46
+$LABEL   =(TON,MM,N,S)                                                        47
+$ACCELERATION                                                                 48
+$REAL-IMAGINARY OUTPUT                                                        49
+$SUBCASE ID =           1                                                     50
+$FREQUENCY =   2.5000000E+00                                                  51
+        70       G     -4.573467E-05     -2.111967E-03      4.841886E-04      52
+-CONT-                  3.138451E-06      1.127518E-06      4.959821E-07      53
+-CONT-                 -2.843668E-05     -2.313120E-03      1.565007E-04      54
+-CONT-                  1.291825E-05      4.466071E-07      1.523180E-07      55
+$TITLE   =16DOF-SWIFT-FRF                                                     56
+$SUBTITLE=                                                                    57
+$LABEL   =(TON,MM,N,S)                                                        58
+$ACCELERATION                                                                 59
+$REAL-IMAGINARY OUTPUT                                                        60
+$SUBCASE ID =           1                                                     61
+$FREQUENCY =   3.0000000E+00                                                  62
+        70       G     -7.669059E-05     -2.960948E-03      7.900443E-04      63
+-CONT-                  4.301878E-06      1.834953E-06      7.458734E-07      64
+-CONT-                 -3.179018E-05     -1.639486E-03      2.241358E-04      65
+-CONT-                  9.359394E-06      6.636847E-07      1.662022E-07      66
+$TITLE   =16DOF-SWIFT-FRF                                                     67
+$SUBTITLE=                                                                    68
+$LABEL   =(TON,MM,N,S)                                                        69
+$ACCELERATION                                                                 70
+$REAL-IMAGINARY OUTPUT                                                        71
+$SUBCASE ID =           1                                                     72
+$FREQUENCY =   3.5000000E+00                                                  73
+        70       G     -1.172388E-04     -3.684065E-03      1.205040E-03      74
+-CONT-                  3.304814E-06      2.808487E-06      1.077212E-06      75
+-CONT-                 -3.572037E-05     -1.250862E-03      3.059373E-04      76
+-CONT-                  7.280088E-06      9.207708E-07      1.977244E-07      77
+$TITLE   =16DOF-SWIFT-FRF                                                     78
+$SUBTITLE=                                                                    79
+$LABEL   =(TON,MM,N,S)                                                        80
+$ACCELERATION                                                                 81
+$REAL-IMAGINARY OUTPUT                                                        82
+$SUBCASE ID =           1                                                     83
+$FREQUENCY =   4.0000000E+00                                                  84
+        70       G     -1.717126E-04     -4.526453E-03      1.755791E-03      85
+-CONT-                  1.335260E-06      4.102997E-06      1.510863E-06      86
+-CONT-                 -3.892074E-05     -9.762079E-04      4.004283E-04      87
+-CONT-                  5.889762E-06      1.220817E-06      2.384853E-07      88
+$TITLE   =16DOF-SWIFT-FRF                                                     89
+$SUBTITLE=                                                                    90
+$LABEL   =(TON,MM,N,S)                                                        91
+$ACCELERATION                                                                 92
+$REAL-IMAGINARY OUTPUT                                                        93
+$SUBCASE ID =           1                                                     94
+$FREQUENCY =   4.5000000E+00                                                  95
+        70       G     -2.627309E-04     -5.978009E-03      2.660695E-03      96
+-CONT-                 -1.479015E-06      6.237424E-06      2.221544E-06      97
+-CONT-                 -3.727428E-05     -6.659252E-04      4.881791E-04      98
+-CONT-                  5.192180E-06      1.551314E-06      2.601597E-07      99
+$TITLE   =16DOF-SWIFT-FRF                                                    100
+$SUBTITLE=                                                                   101
+$LABEL   =(TON,MM,N,S)                                                       102
+$ACCELERATION                                                                103
+$REAL-IMAGINARY OUTPUT                                                       104
+$SUBCASE ID =           1                                                    105
+$FREQUENCY =   5.0000000E+00                                                 106
+        70       G     -3.877057E-04     -7.790202E-03      3.871465E-03     107
+-CONT-                 -5.770144E-06      9.095272E-06      3.155514E-06     108
+-CONT-                 -2.815574E-05     -2.906052E-04      5.757592E-04     109
+-CONT-                  4.622107E-06      1.918796E-06      2.752667E-07     110
+$TITLE   =16DOF-SWIFT-FRF                                                    111
+$SUBTITLE=                                                                   112
+$LABEL   =(TON,MM,N,S)                                                       113
+$ACCELERATION                                                                114
+$REAL-IMAGINARY OUTPUT                                                       115
+$SUBCASE ID =           1                                                    116
+$FREQUENCY =   5.5000000E+00                                                 117
+        70       G     -5.575422E-04     -1.006482E-02      5.461480E-03     118
+-CONT-                 -1.177866E-05      1.285205E-05      4.360710E-06     119
+-CONT-                 -6.816893E-06      1.865580E-04      6.568776E-04     120
+-CONT-                  4.162056E-06      2.318855E-06      2.803429E-07     121
+$TITLE   =16DOF-SWIFT-FRF                                                    122
+$SUBTITLE=                                                                   123
+$LABEL   =(TON,MM,N,S)                                                       124
+$ACCELERATION                                                                125
+$REAL-IMAGINARY OUTPUT                                                       126
+$SUBCASE ID =           1                                                    127
+$FREQUENCY =   6.0000000E+00                                                 128
+        70       G     -7.874722E-04     -1.292837E-02      7.522897E-03     129
+-CONT-                 -1.981853E-05      1.773083E-05      5.894743E-06     130
+-CONT-                  3.406266E-05      8.108588E-04      7.219423E-04     131
+-CONT-                  3.828298E-06      2.742280E-06      2.718100E-07     132
+$TITLE   =16DOF-SWIFT-FRF                                                    133
+$SUBTITLE=                                                                   134
+$LABEL   =(TON,MM,N,S)                                                       135
+$ACCELERATION                                                                136
+$REAL-IMAGINARY OUTPUT                                                       137
+$SUBCASE ID =           1                                                    138
+$FREQUENCY =   6.5000000E+00                                                 139
+        70       G     -1.099459E-03     -1.654485E-02      1.017376E-02     140
+-CONT-                 -3.028532E-05      2.402177E-05      7.827477E-06     141
+-CONT-                  1.061839E-04      1.644483E-03      7.559604E-04     142
+-CONT-                  3.668867E-06      3.171249E-06      2.464789E-07     143
+$TITLE   =16DOF-SWIFT-FRF                                                    144
+$SUBTITLE=                                                                   145
+$LABEL   =(TON,MM,N,S)                                                       146
+$ACCELERATION                                                                147
+$REAL-IMAGINARY OUTPUT                                                       148
+$SUBCASE ID =           1                                                    149
+$FREQUENCY =   7.0000000E+00                                                 150
+        70       G     -1.526220E-03     -2.113268E-02      1.356843E-02     151
+-CONT-                 -4.368112E-05      3.211184E-05      1.024401E-05     152
+-CONT-                  2.290169E-04      2.778070E-03      7.349386E-04     153
+-CONT-                  3.771924E-06      3.572267E-06      2.031019E-07     154
+$TITLE   =16DOF-SWIFT-FRF                                                    155
+$SUBTITLE=                                                                   156
+$LABEL   =(TON,MM,N,S)                                                       157
+$ACCELERATION                                                                158
+$REAL-IMAGINARY OUTPUT                                                       159
+$SUBCASE ID =           1                                                    160
+$FREQUENCY =   7.5000000E+00                                                 161
+        70       G     -2.118234E-03     -2.698948E-02      1.791331E-02     162
+-CONT-                 -6.065716E-05      4.253133E-05      1.324766E-05     163
+-CONT-                  4.365090E-04      4.349352E-03      6.194689E-04     164
+-CONT-                  4.286186E-06      3.882601E-06      1.464717E-07     165
+$TITLE   =16DOF-SWIFT-FRF                                                    166
+$SUBTITLE=                                                                   167
+$LABEL   =(TON,MM,N,S)                                                       168
+$ACCELERATION                                                                169
+$REAL-IMAGINARY OUTPUT                                                       170
+$SUBCASE ID =           1                                                    171
+$FREQUENCY =   8.0000000E+00                                                 172
+        70       G     -2.956399E-03     -3.453030E-02      2.349128E-02     173
+-CONT-                 -8.208193E-05      5.602945E-05      1.696168E-05     174
+-CONT-                  7.912527E-04      6.575679E-03      3.428178E-04     175
+-CONT-                  5.461120E-06      3.983028E-06      9.813548E-08     176
+$TITLE   =16DOF-SWIFT-FRF                                                    177
+$SUBTITLE=                                                                   178
+$LABEL   =(TON,MM,N,S)                                                       179
+$ACCELERATION                                                                180
+$REAL-IMAGINARY OUTPUT                                                       181
+$SUBCASE ID =           1                                                    182
+$FREQUENCY =   8.5000000E+00                                                 183
+        70       G     -4.175751E-03     -4.434820E-02      3.070077E-02     184
+-CONT-                 -1.091511E-04      7.370181E-05      2.152609E-05     185
+-CONT-                  1.416812E-03      9.814263E-03     -2.122864E-04     186
+-CONT-                  7.725300E-06      3.639707E-06      1.254552E-07     187
+$TITLE   =16DOF-SWIFT-FRF                                                    188
+$SUBTITLE=                                                                   189
+$LABEL   =(TON,MM,N,S)                                                       190
+$ACCELERATION                                                                191
+$REAL-IMAGINARY OUTPUT                                                       192
+$SUBCASE ID =           1                                                    193
+$FREQUENCY =   9.0000000E+00                                                 194
+        70       G     -6.010740E-03     -5.731237E-02      4.011999E-02     195
+-CONT-                 -1.435685E-04      9.721498E-05      2.708099E-05     196
+-CONT-                  2.578883E-03      1.468066E-02     -1.261545E-03     197
+-CONT-                  1.184558E-05      2.370453E-06      4.259213E-07     198
+$TITLE   =16DOF-SWIFT-FRF                                                    199
+$SUBTITLE=                                                                   200
+$LABEL   =(TON,MM,N,S)                                                       201
+$ACCELERATION                                                                202
+$REAL-IMAGINARY OUTPUT                                                       203
+$SUBCASE ID =           1                                                    204
+$FREQUENCY =   9.5000000E+00                                                 205
+        70       G     -8.876684E-03     -7.472703E-02      5.261407E-02     206
+-CONT-                 -1.878497E-04      1.292156E-04      3.372409E-05     207
+-CONT-                  4.914795E-03      2.229877E-02     -3.224929E-03     208
+-CONT-                  1.927229E-05     -8.955357E-07      1.596835E-06     209
+$TITLE   =16DOF-SWIFT-FRF                                                    210
+$SUBTITLE=                                                                   211
+$LABEL   =(TON,MM,N,S)                                                       212
+$ACCELERATION                                                                213
+$REAL-IMAGINARY OUTPUT                                                       214
+$SUBCASE ID =           1                                                    215
+$FREQUENCY =   1.0000000E+01                                                 216
+        70       G     -1.344361E-02     -9.857065E-02      6.950691E-02     217
+-CONT-                 -2.458121E-04      1.740599E-04      4.151023E-05     218
+-CONT-                  1.018478E-02      3.487540E-02     -6.980338E-03     219
+-CONT-                  3.295372E-05     -8.807813E-06      5.616420E-06     220
+$TITLE   =16DOF-SWIFT-FRF                                                    221
+$SUBTITLE=                                                                   222
+$LABEL   =(TON,MM,N,S)                                                       223
+$ACCELERATION                                                                224
+$REAL-IMAGINARY OUTPUT                                                       225
+$SUBCASE ID =           1                                                    226
+$FREQUENCY =   1.0500000E+01                                                 227
+        70       G     -1.976972E-02     -1.316795E-01      9.276946E-02     228
+-CONT-                 -3.231481E-04      2.385436E-04      5.184407E-05     229
+-CONT-                  2.411628E-02      5.715749E-02     -1.451886E-02     230
+-CONT-                  5.945160E-05     -2.897995E-05      1.991695E-05     231
+$TITLE   =16DOF-SWIFT-FRF                                                    232
+$SUBTITLE=                                                                   233
+$LABEL   =(TON,MM,N,S)                                                       234
+$ACCELERATION                                                                235
+$REAL-IMAGINARY OUTPUT                                                       236
+$SUBCASE ID =           1                                                    237
+$FREQUENCY =   1.1000000E+01                                                 238
+        70       G     -1.324787E-02     -1.761819E-01      1.244665E-01     239
+-CONT-                 -4.258707E-04      3.237868E-04      8.908962E-05     240
+-CONT-                  6.434430E-02      9.997680E-02     -3.035746E-02     241
+-CONT-                  1.141750E-04     -8.456134E-05      7.008047E-05     242
+$TITLE   =16DOF-SWIFT-FRF                                                    243
+$SUBTITLE=                                                                   244
+$LABEL   =(TON,MM,N,S)                                                       245
+$ACCELERATION                                                                246
+$REAL-IMAGINARY OUTPUT                                                       247
+$SUBCASE ID =           1                                                    248
+$FREQUENCY =   1.1500000E+01                                                 249
+        70       G      8.026607E-02     -2.279646E-01      1.669795E-01     250
+-CONT-                 -5.548379E-04      3.867392E-04      2.801740E-04     251
+-CONT-                  7.973778E-02      1.792019E-01     -6.023597E-02     252
+-CONT-                  2.208181E-04     -1.657738E-04      7.526616E-05     253
+$TITLE   =16DOF-SWIFT-FRF                                                    254
+$SUBTITLE=                                                                   255
+$LABEL   =(TON,MM,N,S)                                                       256
+$ACCELERATION                                                                257
+$REAL-IMAGINARY OUTPUT                                                       258
+$SUBCASE ID =           1                                                    259
+$FREQUENCY =   1.2000000E+01                                                 260
+        70       G      1.084420E-01     -2.801741E-01      2.269792E-01     261
+-CONT-                 -7.135474E-04      5.537688E-04      3.986990E-04     262
+-CONT-                 -1.437016E-02      3.457913E-01     -1.357879E-01     263
+-CONT-                  4.647231E-04     -2.713138E-04     -1.418971E-04     264
+$TITLE   =16DOF-SWIFT-FRF                                                    265
+$SUBTITLE=                                                                   266
+$LABEL   =(TON,MM,N,S)                                                       267
+$ACCELERATION                                                                268
+$REAL-IMAGINARY OUTPUT                                                       269
+$SUBCASE ID =           1                                                    270
+$FREQUENCY =   1.2500000E+01                                                 271
+        70       G      6.723297E-02     -1.580277E-01      2.224056E-01     272
+-CONT-                 -6.478620E-04      7.054169E-04      3.667964E-04     273
+-CONT-                 -7.636395E-02      6.581532E-01     -3.086181E-01     274
+-CONT-                  9.758506E-04     -6.765117E-04     -4.122565E-04     275
+$TITLE   =16DOF-SWIFT-FRF                                                    276
+$SUBTITLE=                                                                   277
+$LABEL   =(TON,MM,N,S)                                                       278
+$ACCELERATION                                                                279
+$REAL-IMAGINARY OUTPUT                                                       280
+$SUBCASE ID =           1                                                    281
+$FREQUENCY =   1.3000000E+01                                                 282
+        70       G     -1.901885E-03      3.019187E-01      2.316059E-02     283
+-CONT-                 -1.894852E-05      4.296692E-04      1.283971E-04     284
+-CONT-                 -8.131196E-02      7.300112E-01     -4.110692E-01     285
+-CONT-                  1.208698E-03     -1.169253E-03     -5.891098E-04     286
+$TITLE   =16DOF-SWIFT-FRF                                                    287
+$SUBTITLE=                                                                   288
+$LABEL   =(TON,MM,N,S)                                                       289
+$ACCELERATION                                                                290
+$REAL-IMAGINARY OUTPUT                                                       291
+$SUBCASE ID =           1                                                    292
+$FREQUENCY =   1.3500000E+01                                                 293
+        70       G     -2.892274E-02      5.383802E-01     -1.113079E-01     294
+-CONT-                  3.466096E-04      1.738761E-04     -1.097316E-06     295
+-CONT-                 -4.423632E-02      4.408909E-01     -3.102536E-01     296
+-CONT-                  8.549789E-04     -1.509675E-03     -6.444703E-04     297
+$TITLE   =16DOF-SWIFT-FRF                                                    298
+$SUBTITLE=                                                                   299
+$LABEL   =(TON,MM,N,S)                                                       300
+$ACCELERATION                                                                301
+$REAL-IMAGINARY OUTPUT                                                       302
+$SUBCASE ID =           1                                                    303
+$FREQUENCY =   1.4000000E+01                                                 304
+        70       G     -1.989415E-02      4.967802E-01     -1.099124E-01     305
+-CONT-                  3.848369E-04     -2.533014E-03     -1.050782E-03     306
+-CONT-                 -2.078714E-02      1.972486E-01     -1.971755E-01     307
+-CONT-                  5.366543E-04     -2.441428E-03     -9.731839E-04     308
+$TITLE   =16DOF-SWIFT-FRF                                                    309
+$SUBTITLE=                                                                   310
+$LABEL   =(TON,MM,N,S)                                                       311
+$ACCELERATION                                                                312
+$REAL-IMAGINARY OUTPUT                                                       313
+$SUBCASE ID =           1                                                    314
+$FREQUENCY =   1.4500000E+01                                                 315
+        70       G     -2.208365E-02      4.874644E-01     -6.472805E-02     316
+-CONT-                  2.292424E-04     -1.199764E-03     -5.065127E-04     317
+-CONT-                 -1.797053E-02      1.528702E-01     -1.800140E-01     318
+-CONT-                  3.795286E-04      1.373702E-04      5.582511E-05     319
+$TITLE   =16DOF-SWIFT-FRF                                                    320
+$SUBTITLE=                                                                   321
+$LABEL   =(TON,MM,N,S)                                                       322
+$ACCELERATION                                                                323
+$REAL-IMAGINARY OUTPUT                                                       324
+$SUBCASE ID =           1                                                    325
+$FREQUENCY =   1.5000000E+01                                                 326
+        70       G     -2.160824E-02      4.901514E-01     -1.865597E-02     327
+-CONT-                  1.090228E-04     -7.627117E-04     -3.200450E-04     328
+-CONT-                 -1.270388E-02      8.498169E-02     -1.758700E-01     329
+-CONT-                  3.229054E-04      7.243723E-05      3.275508E-05     330
+$TITLE   =16DOF-SWIFT-FRF                                                    331
+$SUBTITLE=                                                                   332
+$LABEL   =(TON,MM,N,S)                                                       333
+$ACCELERATION                                                                334
+$REAL-IMAGINARY OUTPUT                                                       335
+$SUBCASE ID =           1                                                    336
+$FREQUENCY =   1.5500000E+01                                                 337
+        70       G     -2.260674E-02      5.111409E-01      4.654465E-02     338
+-CONT-                 -1.846541E-05     -6.276380E-04     -2.546014E-04     339
+-CONT-                 -9.726643E-03      2.402181E-02     -2.049189E-01     340
+-CONT-                  3.200961E-04      5.637360E-05      2.279647E-05     341
+$TITLE   =16DOF-SWIFT-FRF                                                    342
+$SUBTITLE=                                                                   343
+$LABEL   =(TON,MM,N,S)                                                       344
+$ACCELERATION                                                                345
+$REAL-IMAGINARY OUTPUT                                                       346
+$SUBCASE ID =           1                                                    347
+$FREQUENCY =   1.6000000E+01                                                 348
+        70       G     -2.671107E-02      5.635072E-01      1.369988E-01     349
+-CONT-                 -1.601066E-04     -5.708379E-04     -2.206984E-04     350
+-CONT-                 -6.559563E-03     -6.632725E-02     -3.007865E-01     351
+-CONT-                  3.943387E-04      8.224383E-05      2.096849E-05     352
+$TITLE   =16DOF-SWIFT-FRF                                                    353
+$SUBTITLE=                                                                   354
+$LABEL   =(TON,MM,N,S)                                                       355
+$ACCELERATION                                                                356
+$REAL-IMAGINARY OUTPUT                                                       357
+$SUBCASE ID =           1                                                    358
+$FREQUENCY =   1.6500000E+01                                                 359
+        70       G     -3.535043E-02      6.242495E-01      2.055154E-01     360
+-CONT-                 -2.625556E-04     -5.261778E-04     -1.992950E-04     361
+-CONT-                  2.918302E-03     -2.857007E-01     -5.852552E-01     362
+-CONT-                  6.508696E-04      1.750528E-04      2.575059E-05     363
+$TITLE   =16DOF-SWIFT-FRF                                                    364
+$SUBTITLE=                                                                   365
+$LABEL   =(TON,MM,N,S)                                                       366
+$ACCELERATION                                                                367
+$REAL-IMAGINARY OUTPUT                                                       368
+$SUBCASE ID =           1                                                    369
+$FREQUENCY =   1.7000000E+01                                                 370
+        70       G     -2.938204E-02      3.081434E-01     -2.749033E-01     371
+-CONT-                  1.652541E-04     -3.096105E-04     -1.728539E-04     372
+-CONT-                  3.160476E-02     -6.684378E-01     -1.030468E+00     373
+-CONT-                  1.012220E-03      2.921619E-04      3.550750E-05     374
+$TITLE   =16DOF-SWIFT-FRF                                                    375
+$SUBTITLE=                                                                   376
+$LABEL   =(TON,MM,N,S)                                                       377
+$ACCELERATION                                                                378
+$REAL-IMAGINARY OUTPUT                                                       379
+$SUBCASE ID =           1                                                    380
+$FREQUENCY =   1.7500000E+01                                                 381
+        70       G      1.198914E-03     -1.134296E-01     -7.821333E-01     382
+-CONT-                  5.303990E-04     -1.454130E-04     -1.490142E-04     383
+-CONT-                  2.824703E-02     -3.751861E-01     -5.431992E-01     384
+-CONT-                  4.974993E-04      1.060613E-04      2.567055E-05     385
+$TITLE   =16DOF-SWIFT-FRF                                                    386
+$SUBTITLE=                                                                   387
+$LABEL   =(TON,MM,N,S)                                                       388
+$ACCELERATION                                                                389
+$REAL-IMAGINARY OUTPUT                                                       390
+$SUBCASE ID =           1                                                    391
+$FREQUENCY =   1.8000000E+01                                                 392
+        70       G      6.072349E-03     -7.413525E-02     -6.788139E-01     393
+-CONT-                  3.340762E-04     -1.760730E-04     -1.409626E-04     394
+-CONT-                  1.476604E-02     -1.404609E-01     -2.217629E-01     395
+-CONT-                  1.969014E-04      8.326767E-06      1.919466E-05     396
+$TITLE   =16DOF-SWIFT-FRF                                                    397
+$SUBTITLE=                                                                   398
+$LABEL   =(TON,MM,N,S)                                                       399
+$ACCELERATION                                                                400
+$REAL-IMAGINARY OUTPUT                                                       401
+$SUBCASE ID =           1                                                    402
+$FREQUENCY =   1.8500000E+01                                                 403
+        70       G      5.102444E-03     -8.668556E-03     -5.714612E-01     404
+-CONT-                  1.499920E-04     -2.000043E-04     -1.347841E-04     405
+-CONT-                  8.513248E-03     -5.913422E-02     -1.153980E-01     406
+-CONT-                  1.001723E-04     -1.917748E-05      1.752885E-05     407
+$TITLE   =16DOF-SWIFT-FRF                                                    408
+$SUBTITLE=                                                                   409
+$LABEL   =(TON,MM,N,S)                                                       410
+$ACCELERATION                                                                411
+$REAL-IMAGINARY OUTPUT                                                       412
+$SUBCASE ID =           1                                                    413
+$FREQUENCY =   1.9000000E+01                                                 414
+        70       G      3.745085E-03      3.594018E-02     -5.043120E-01     415
+-CONT-                  4.931817E-06     -2.101229E-04     -1.288370E-04     416
+-CONT-                  5.392341E-03     -2.630218E-02     -7.255531E-02     417
+-CONT-                  6.040731E-05     -2.826875E-05      1.739077E-05     418
+$TITLE   =16DOF-SWIFT-FRF                                                    419
+$SUBTITLE=                                                                   420
+$LABEL   =(TON,MM,N,S)                                                       421
+$ACCELERATION                                                                422
+$REAL-IMAGINARY OUTPUT                                                       423
+$SUBCASE ID =           1                                                    424
+$FREQUENCY =   1.9500000E+01                                                 425
+        70       G      2.558362E-03      6.632403E-02     -4.622503E-01     426
+-CONT-                 -1.199126E-04     -2.128765E-04     -1.230168E-04     427
+-CONT-                  3.592990E-03     -1.074492E-02     -5.164625E-02     428
+-CONT-                  3.965252E-05     -3.167044E-05      1.784939E-05     429
+$TITLE   =16DOF-SWIFT-FRF                                                    430
+$SUBTITLE=                                                                   431
+$LABEL   =(TON,MM,N,S)                                                       432
+$ACCELERATION                                                                433
+$REAL-IMAGINARY OUTPUT                                                       434
+$SUBCASE ID =           1                                                    435
+$FREQUENCY =   2.0000000E+01                                                 436
+        70       G      1.527728E-03      8.833331E-02     -4.351999E-01     437
+-CONT-                 -2.359361E-04     -2.117021E-04     -1.172310E-04     438
+-CONT-                  2.429320E-03     -2.501710E-03     -3.993110E-02     439
+-CONT-                  2.668179E-05     -3.298411E-05      1.861372E-05     440
+$TITLE   =16DOF-SWIFT-FRF                                                    441
+$SUBTITLE=                                                                   442
+$LABEL   =(TON,MM,N,S)                                                       443
+$ACCELERATION                                                                444
+$REAL-IMAGINARY OUTPUT                                                       445
+$SUBCASE ID =           1                                                    446
+$FREQUENCY =   2.0500000E+01                                                 447
+        70       G      5.871328E-04      1.053328E-01     -4.176718E-01     448
+-CONT-                 -3.494945E-04     -2.082499E-04     -1.113514E-04     449
+-CONT-                  1.606448E-03      2.217648E-03     -3.267849E-02     450
+-CONT-                  1.742393E-05     -3.345021E-05      1.957675E-05     451
+$TITLE   =16DOF-SWIFT-FRF                                                    452
+$SUBTITLE=                                                                   453
+$LABEL   =(TON,MM,N,S)                                                       454
+$ACCELERATION                                                                455
+$REAL-IMAGINARY OUTPUT                                                       456
+$SUBCASE ID =           1                                                    457
+$FREQUENCY =   2.1000000E+01                                                 458
+        70       G     -3.188660E-04      1.192471E-01     -4.065900E-01     459
+-CONT-                 -4.644597E-04     -2.033364E-04     -1.052326E-04     460
+-CONT-                  9.812514E-04      5.072948E-03     -2.784175E-02     461
+-CONT-                  1.014315E-05     -3.356421E-05      2.069591E-05     462
+$TITLE   =16DOF-SWIFT-FRF                                                    463
+$SUBTITLE=                                                                   464
+$LABEL   =(TON,MM,N,S)                                                       465
+$ACCELERATION                                                                466
+$REAL-IMAGINARY OUTPUT                                                       467
+$SUBCASE ID =           1                                                    468
+$FREQUENCY =   2.1500000E+01                                                 469
+        70       G     -1.232678E-03      1.312260E-01     -4.001404E-01     470
+-CONT-                 -5.834713E-04     -1.973786E-04     -9.871875E-05     471
+-CONT-                  4.770821E-04      6.872030E-03     -2.442647E-02     472
+-CONT-                  4.000373E-06     -3.354690E-05      2.195551E-05     473
+$TITLE   =16DOF-SWIFT-FRF                                                    474
+$SUBTITLE=                                                                   475
+$LABEL   =(TON,MM,N,S)                                                       476
+$ACCELERATION                                                                477
+$REAL-IMAGINARY OUTPUT                                                       478
+$SUBCASE ID =           1                                                    479
+$FREQUENCY =   2.2000000E+01                                                 480
+        70       G     -2.188132E-03      1.419918E-01     -3.972034E-01     481
+-CONT-                 -7.085418E-04     -1.905920E-04     -9.164264E-05     482
+-CONT-                  4.946080E-05      8.041010E-03     -2.190387E-02     483
+-CONT-                 -1.452593E-06     -3.350535E-05      2.335304E-05     484
+$TITLE   =16DOF-SWIFT-FRF                                                    485
+$SUBTITLE=                                                                   486
+$LABEL   =(TON,MM,N,S)                                                       487
+$ACCELERATION                                                                488
+$REAL-IMAGINARY OUTPUT                                                       489
+$SUBCASE ID =           1                                                    490
+$FREQUENCY =   2.2500000E+01                                                 491
+        70       G     -3.214448E-03      1.520218E-01     -3.970637E-01     492
+-CONT-                 -8.413693E-04     -1.830853E-04     -8.382210E-05     493
+-CONT-                 -3.292601E-04      8.819162E-03     -1.997178E-02     494
+-CONT-                 -6.475510E-06     -3.349558E-05      2.489345E-05     495
+$TITLE   =16DOF-SWIFT-FRF                                                    496
+$SUBTITLE=                                                                   497
+$LABEL   =(TON,MM,N,S)                                                       498
+$ACCELERATION                                                                499
+$REAL-IMAGINARY OUTPUT                                                       500
+$SUBCASE ID =           1                                                    501
+$FREQUENCY =   2.3000000E+01                                                 502
+        70       G     -4.339141E-03      1.616469E-01     -3.992547E-01     503
+-CONT-                 -9.835135E-04     -1.749093E-04     -7.505388E-05     504
+-CONT-                 -6.773699E-04      9.347687E-03     -1.844708E-02     505
+-CONT-                 -1.122953E-05     -3.354938E-05      2.658680E-05     506
+$TITLE   =16DOF-SWIFT-FRF                                                    507
+$SUBTITLE=                                                                   508
+$LABEL   =(TON,MM,N,S)                                                       509
+$ACCELERATION                                                                510
+$REAL-IMAGINARY OUTPUT                                                       511
+$SUBCASE ID =           1                                                    512
+$FREQUENCY =   2.3500000E+01                                                 513
+        70       G     -5.590188E-03      1.711091E-01     -4.034711E-01     514
+-CONT-                 -1.136505E-03     -1.660832E-04     -6.510614E-05     515
+-CONT-                 -1.007715E-03      9.713308E-03     -1.721315E-02     516
+-CONT-                 -1.582051E-05     -3.368683E-05      2.844716E-05     517
+$TITLE   =16DOF-SWIFT-FRF                                                    518
+$SUBTITLE=                                                                   519
+$LABEL   =(TON,MM,N,S)                                                       520
+$ACCELERATION                                                                521
+$REAL-IMAGINARY OUTPUT                                                       522
+$SUBCASE ID =           1                                                    523
+$FREQUENCY =   2.4000000E+01                                                 524
+        70       G     -6.997815E-03      1.805947E-01     -4.095172E-01     525
+-CONT-                 -1.301919E-03     -1.566103E-04     -5.370918E-05     526
+-CONT-                 -1.329886E-03      9.971054E-03     -1.619253E-02     527
+-CONT-                 -2.032140E-05     -3.392253E-05      3.049230E-05     528
+$TITLE   =16DOF-SWIFT-FRF                                                    529
+$SUBTITLE=                                                                   530
+$LABEL   =(TON,MM,N,S)                                                       531
+$ACCELERATION                                                                532
+$REAL-IMAGINARY OUTPUT                                                       533
+$SUBCASE ID =           1                                                    534
+$FREQUENCY =   2.4500000E+01                                                 535
+        70       G     -8.596172E-03      1.902556E-01     -4.172766E-01     536
+-CONT-                 -1.481441E-03     -1.464882E-04     -4.054394E-05     537
+-CONT-                 -1.651502E-03      1.015677E-02     -1.533176E-02     538
+-CONT-                 -2.478441E-05     -3.426896E-05      3.274374E-05     539
+$TITLE   =16DOF-SWIFT-FRF                                                    540
+$SUBTITLE=                                                                   541
+$LABEL   =(TON,MM,N,S)                                                       542
+$ACCELERATION                                                                543
+$REAL-IMAGINARY OUTPUT                                                       544
+$SUBCASE ID =           1                                                    545
+$FREQUENCY =   2.5000000E+01                                                 546
+        70       G     -1.042510E-02      2.002234E-01     -4.266929E-01     547
+-CONT-                 -1.676915E-03     -1.357171E-04     -2.522741E-05     548
+-CONT-                 -1.979022E-03      1.029432E-02     -1.459267E-02     549
+-CONT-                 -2.924789E-05     -3.473837E-05      3.522702E-05     550
+$TITLE   =16DOF-SWIFT-FRF                                                    551
+$SUBTITLE=                                                                   552
+$LABEL   =(TON,MM,N,S)                                                       553
+$ACCELERATION                                                                554
+$REAL-IMAGINARY OUTPUT                                                       555
+$SUBCASE ID =           1                                                    556
+$FREQUENCY =   2.5500000E+01                                                 557
+        70       G     -1.253220E-02      2.106190E-01     -4.377587E-01     558
+-CONT-                 -1.890400E-03     -1.243067E-04     -7.293787E-06     559
+-CONT-                 -2.318274E-03      1.039979E-02     -1.394703E-02     560
+-CONT-                 -3.374039E-05     -3.534401E-05      3.797220E-05     561
