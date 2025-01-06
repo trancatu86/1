@@ -1,0 +1,99 @@
+import numpy as np
+import pandas as pd
+import sys
+import math
+import time
+import csv
+temp_list=[]
+i = 0
+k=0
+h=0
+def convert_punch_to_csv_acce(punchfile, csv_outfile_real_imag, csv_outfile_amp_phase):
+    global frequency, temp, k, h 
+    with open(punchfile,'r') as f:
+        file_contents = f.readlines()
+    for line in file_contents:
+    	if line.find('$FREQUENCY') != -1:
+            temp=0
+            temp_list=[]
+            temp_list_amp_phase =[]
+            frequency_line= line.replace(' ',',')
+            frequency_value = frequency_line.split(",")[4]
+            temp_list.append(float(frequency_value))
+            temp_list_amp_phase.append(float(frequency_value))           
+            
+    	if line.find('-CONT-') != -1:
+            temp = temp + 1
+    	if line.find('$') == -1 :
+            punch_line= line.replace(' ',',')
+            punch = punch_line.split(",")         
+            for i in range(len(punch)-1):
+                if punch[i] != "" and punch[i] != "G" and punch[i] != "-CONT-" :
+                    temp_list.append(float(punch[i]))
+            if temp == 3: 
+                with open(csv_outfile_real_imag,"a") as f:	
+                    string = str(k+1)
+                    for item in temp_list:
+                        string = string + ","+ str(item)
+                    f.write(f"{string}\n")
+                
+                node = temp_list[1]                
+                rx = temp_list[2]
+                ry = temp_list[3]
+                rz = temp_list[4]
+
+                rmx = temp_list[5]
+                rmy = temp_list[6]
+                rmz = temp_list[7]
+
+                ix = temp_list[8]
+                iy = temp_list[9]
+                iz = temp_list[10]
+
+                imx = temp_list[11]
+                imy = temp_list[12]
+                imz = temp_list[13]
+                
+                amp_rx = math.sqrt(rx**2 + ix**2)
+                amp_ry = math.sqrt(ry**2 + iy**2)
+                amp_rz = math.sqrt(rz**2 + iz**2)
+                amp_rmx = math.sqrt(rmx**2 + imx**2)
+                amp_rmy = math.sqrt(rmy**2 + imy**2)
+                amp_rmz = math.sqrt(rmz**2 + imz**2)
+
+                phase_rx= math.atan2(ix,rx)
+                phase_ry= math.atan2(iy,ry)  
+                phase_rz= math.atan2(iz,rz)
+                phase_rmx= math.atan2(imx,rmx)
+                phase_rmy= math.atan2(imy,rmy)
+                phase_rmz= math.atan2(imz,rmz)  
+                
+                temp_list_amp_phase.append(node)           
+                temp_list_amp_phase.append(amp_rx)
+                temp_list_amp_phase.append(amp_ry)
+                temp_list_amp_phase.append(amp_rz)
+                temp_list_amp_phase.append(amp_rmx)
+                temp_list_amp_phase.append(amp_rmy)
+                temp_list_amp_phase.append(amp_rmz)
+                
+                temp_list_amp_phase.append(phase_rx)
+                temp_list_amp_phase.append(phase_ry)
+                temp_list_amp_phase.append(phase_rz)
+                temp_list_amp_phase.append(phase_rmx)
+                temp_list_amp_phase.append(phase_rmy)
+                temp_list_amp_phase.append(phase_rmz)
+
+                with open(csv_outfile_amp_phase,"a") as f:	
+                    string = str(h+1)                    
+                    for item in temp_list_amp_phase:
+                        string = string + ","+ str(item)
+                    f.write(f"{string}\n")                    
+                    
+                k=k+1
+                h=h+1
+punchfile ="YEA_Z12E_2WD_CVT_2k5Hz_freq_incr_6p25Hz_EIGRL_2kHz_tsushima_acce.pch"
+#punchfile ="Body_punch_1.pch"
+
+csv_outfile_real_imag ="Real_imag.csv"
+csv_outfile_amp_phase = "Amplitude_phase.csv"
+convert_punch_to_csv_acce(punchfile, csv_outfile_real_imag, csv_outfile_amp_phase)
