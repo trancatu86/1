@@ -1,34 +1,100 @@
 Private Sub Worksheet_Change(ByVal Target As Range)
-    Dim ws1 As Worksheet, ws2 As Worksheet, ws3 As Worksheet, ws4 As Worksheet
+    Dim ws1, ws2, ws3, ws4, ws5, ws6, ws7, ws8, ws9, ws10, ws11 As Worksheet
+    Dim wso1, wso2, wso3, wso4, wso5, wso6, wso7, wso8, wso9 As Worksheet
+    
+    Dim AnalysisType_1, AnalysisType_2, AnalysisType_3, AnalysisType_4, AnalysisType_5, AnalysisType_6, AnalysisType_7 As String
     Dim checkCell As Range
 
-    ' Xác định ô cần kiểm tra (thay đổi A1 thành ô bạn muốn theo dõi)
-    Set checkCell = Me.Range("A1")
+    Set checkCell = ThisWorkbook.Sheets("目次").Range("C3")
+    
+    AnalysisType_1 = "1.アイドル振動解析(剛体)"
+    AnalysisType_2 = "2.エンジンシェイク解析"
+    AnalysisType_3 = "3.クランキング振動解析"
+    AnalysisType_4 = "4.パワープラント剛体共振解析"
+    AnalysisType_5 = "5.弾性ロール軸解析"
+    AnalysisType_6 = "6.周波数応答解析"
+    AnalysisType_7 = "7.静荷重解析"
+    AnalysisType_8 = "8.アイドル振動解析(弾性体)"
+    AnalysisType_9 = "9.全開加速こもり音解析"
 
-    ' Xác định các sheet
-    Set ws1 = ThisWorkbook.Sheets("Sheet1")
-    Set ws2 = ThisWorkbook.Sheets("Sheet2")
-    Set ws3 = ThisWorkbook.Sheets("Sheet3")
-    Set ws4 = ThisWorkbook.Sheets("Sheet4")
+    Set ws1 = ThisWorkbook.Sheets("I_車体")
+    Set ws2 = ThisWorkbook.Sheets("I_パワープラント")
+    Set ws3 = ThisWorkbook.Sheets("I_エンジン")
+    Set ws4 = ThisWorkbook.Sheets("I_ﾄﾗﾝｽﾐｯｼｮﾝ")
+    Set ws5 = ThisWorkbook.Sheets("I_マウント-剛性")
+    Set ws6 = ThisWorkbook.Sheets("I_マウント-周波数")
+    Set ws7 = ThisWorkbook.Sheets("I_マウント-ロッド")
+    Set ws8 = ThisWorkbook.Sheets("I_荷重条件")
+    Set ws9 = ThisWorkbook.Sheets("I_筒内圧_アイドル")
+    Set ws10 = ThisWorkbook.Sheets("I_筒内圧_WOT")
+    Set ws11 = ThisWorkbook.Sheets("I_エンジン始動停止")
+    
+    Set wso1 = ThisWorkbook.Sheets("O_アイドル振動")
+    Set wso2 = ThisWorkbook.Sheets("O_エンジンシェイク")
+    Set wso3 = ThisWorkbook.Sheets("O_クランキングシェイク")
 
-    ' Kiểm tra xem ô được thay đổi có phải là ô cần kiểm tra không
     If Not Intersect(Target, checkCell) Is Nothing Then
-        Application.EnableEvents = False ' Ngăn vòng lặp vô hạn
+        Application.EnableEvents = False
 
-        ' Nếu giá trị ô là "a"
-        If LCase(checkCell.Value) = "a" Then
-            ws1.Visible = xlSheetVisible ' Hiển thị Sheet1
-            ws2.Visible = xlSheetVisible ' Hiển thị Sheet2
-            ws3.Visible = xlSheetHidden  ' Ẩn Sheet3
-            ws4.Visible = xlSheetHidden  ' Ẩn Sheet4
-        Else
-            ' Khôi phục trạng thái mặc định nếu giá trị không phải "a"
-            ws1.Visible = xlSheetHidden
-            ws2.Visible = xlSheetHidden
+        If LCase(checkCell.Value) = AnalysisType_1 Then
+            ws1.Visible = xlSheetVisible
+            ws2.Visible = xlSheetVisible
             ws3.Visible = xlSheetVisible
-            ws4.Visible = xlSheetVisible
-        End If
+            ws4.Visible = xlSheetHidden
+            ws5.Visible = xlSheetVisible
+            ws6.Visible = xlSheetVisible
+            ws7.Visible = xlSheetVisible
+            ws8.Visible = xlSheetHidden
+            ws9.Visible = xlSheetVisible
+            ws10.Visible = xlSheetHidden
+            ws11.Visible = xlSheetHidden
+            wso1.Visible = xlSheetVisible
+            wso2.Visible = xlSheetHidden
+            wso3.Visible = xlSheetHidden
 
-        Application.EnableEvents = True ' Bật lại sự kiện
+        ElseIf LCase(checkCell.Value) = AnalysisType_2 Then
+            ws1.Visible = xlSheetVisible
+            ws2.Visible = xlSheetVisible
+            ws3.Visible = xlSheetHidden
+            ws4.Visible = xlSheetHidden
+            ws5.Visible = xlSheetVisible
+            ws6.Visible = xlSheetVisible
+            ws7.Visible = xlSheetVisible ' Hide nonlinear
+            ws8.Visible = xlSheetHidden
+            ws9.Visible = xlSheetHidden
+            ws10.Visible = xlSheetHidden
+            ws11.Visible = xlSheetHidden
+
+            wso1.Visible = xlSheetHidden
+            wso2.Visible = xlSheetVisible
+            wso3.Visible = xlSheetHidden
+            Sheets("I_マウント-ロッド").Range("A20:I46").Font.Color = RGB(255, 255, 255)
+            Sheets("目次").Select
+            
+            
+        ElseIf LCase(checkCell.Value) = AnalysisType_3 Then
+            ws1.Visible = xlSheetVisible
+            ws2.Visible = xlSheetVisible
+            ws3.Visible = xlSheetVisible
+            ws4.Visible = xlSheetHidden
+            ws5.Visible = xlSheetVisible
+            ws6.Visible = xlSheetVisible
+            ws7.Visible = xlSheetVisible
+            ws8.Visible = xlSheetHidden
+            ws9.Visible = xlSheetHidden
+            ws10.Visible = xlSheetHidden
+            ws11.Visible = xlSheetHidden
+            
+            wso1.Visible = xlSheetHidden
+            wso2.Visible = xlSheetHidden
+            wso3.Visible = xlSheetVisible
+
+        End If
+        Application.EnableEvents = True
     End If
+'If temp = 2 Then
+'    Call Convert_Grayfont
+'    Sheets("目次").Select
+'End If
+
 End Sub
