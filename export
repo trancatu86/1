@@ -1,0 +1,19 @@
+Sub SaveColumn(sheetName As String, columnName As String, fileName As String)
+  Dim cell
+  Dim FSO
+  Dim file
+  t = 0
+  Set FSO = CreateObject("Scripting.FileSystemObject")
+  Set file = FSO.CreateTextFile(fileName, True)
+  For Each cell In Sheets(sheetName).Columns(columnName).Cells
+    t = 0
+    If cell.Value <> "" Then
+        file.WriteLine cell.Value
+    End If
+  Next
+  file.Close
+
+  Set file = Nothing
+  Set FSO = Nothing
+End Sub
+
