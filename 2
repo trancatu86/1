@@ -1,4 +1,19 @@
+Sub RunMacroFromWorkbookB()
+    Dim wb As Workbook
+    Dim filePath As String
+    filePath = "C:\Path\To\FileB.xlsm" ' Đường dẫn tới Workbook B
 
+    ' Mở Workbook B nếu chưa mở
+    On Error Resume Next
+    Set wb = Workbooks("FileB.xlsm")
+    If wb Is Nothing Then
+        Set wb = Workbooks.Open(filePath)
+    End If
+    On Error GoTo 0
+
+    ' Gọi macro trong Workbook B
+    Application.Run "FileB.xlsm!MyMacro"
+End Sub
 
 Function GetFileNameFromPath(ByVal fullPath As String) As String
     Dim pos As Integer
