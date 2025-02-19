@@ -1,3 +1,30 @@
+
+
+Function GetFileNameFromPath(ByVal fullPath As String) As String
+    Dim pos As Integer
+    pos = InStrRev(fullPath, "\") ' Tìm vị trí của "\" từ phải qua trái
+    If pos > 0 Then
+        GetFileNameFromPath = Mid(fullPath, pos + 1) ' Lấy phần sau ký tự "\"
+    Else
+        GetFileNameFromPath = fullPath ' Nếu không có "\" thì trả về nguyên chuỗi
+    End If
+End Function
+Ví dụ sử dụng:
+
+vba
+コピーする
+編集する
+Sub Test()
+    Dim filePath As String
+    filePath = "C:\Users\Admin\Documents\example.txt"
+    MsgBox GetFileNameFromPath(filePath) ' Kết quả: example.txt
+End Sub
+
+
+
+
+
+
 Private Sub Worksheet_Change(ByVal Target As Range)
     Dim ws1, ws2, ws3, ws4, ws5, ws6, ws7, ws8, ws9, ws10, ws11 As Worksheet
     Dim wso1, wso2, wso3, wso4, wso5, wso6, wso7, wso8, wso9 As Worksheet
