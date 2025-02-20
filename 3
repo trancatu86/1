@@ -1,3 +1,45 @@
+Sub CopyValueToFileA()
+    Dim wbX As Workbook ' Workbook X (File đang chạy)
+    Dim wbA As Workbook ' Workbook A (File đích)
+    Dim fileAPath As String
+    Dim sourceValue As Variant
+    
+    ' Lấy Workbook X (file đang chạy macro)
+    Set wbX = ThisWorkbook
+    
+    ' Đường dẫn đến File A.xlsm
+    fileAPath = "C:\Path\To\FileA.xlsm"
+    
+    ' Mở File A nếu chưa mở
+    On Error Resume Next
+    Set wbA = Workbooks("FileA.xlsm")
+    If wbA Is Nothing Then
+        Set wbA = Workbooks.Open(fileAPath)
+    End If
+    On Error GoTo 0
+    
+    ' Kiểm tra nếu File A mở thành công
+    If Not wbA Is Nothing Then
+        ' Lấy giá trị từ ô A1 của Sheet1 trong File X
+        sourceValue = wbX.Sheets("Sheet1").Range("A1").Value
+        
+        ' Gán giá trị vào ô B1 của Sheet1 trong File A
+        wbA.Sheets("Sheet1").Range("B1").Value = sourceValue
+        
+        ' Lưu và đóng File A (nếu muốn)
+        wbA.Save
+        wbA.Close False
+        MsgBox "Giá trị đã được sao chép thành công!", vbInformation
+    Else
+        MsgBox "Không thể mở File A!", vbExclamation
+    End If
+    
+    ' Dọn dẹp bộ nhớ
+    Set wbA = Nothing
+    Set wbX = Nothing
+End Sub
+
+
 Sub RunMacroFromWorkbookB()
     Dim wb As Workbook
     Dim filePath As String
