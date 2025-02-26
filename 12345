@@ -1,1 +1,3 @@
-https://suzukimotorcorporation.box.com/s/in0djrri1gmwp8kt0dj8cf3rm1n10gxo
+We have written a manual for Actran VI for transmission loss analysis, it is good for learning how to operate and setting edat file, but I think we should not use it to build up edat file from beginning because it is time-consuming.
+In transmission loss analysis case, Excel tool we created is useful for creating edat file. 
+We should use it to create edat file and import it to Actran VI for checking and confirming parameter.
