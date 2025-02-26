@@ -1,3 +1,28 @@
-We have written a manual for Actran VI for transmission loss analysis, it is good for learning how to operate and setting edat file, but I think we should not use it to build up edat file from beginning because it is time-consuming.
-In transmission loss analysis case, Excel tool we created is useful for creating edat file. 
-We should use it to create edat file and import it to Actran VI for checking and confirming parameter.
+Sub DeleteFilesInOutputFolder()
+    Dim folderPath As String
+    Dim fileName As String
+    Dim fileSystem As Object
+    
+    ' Đường dẫn tới thư mục output (cần chỉnh sửa nếu cần)
+    folderPath = ThisWorkbook.Path & "\output\"
+    
+    ' Tạo đối tượng FileSystemObject
+    Set fileSystem = CreateObject("Scripting.FileSystemObject")
+    
+    ' Kiểm tra xem thư mục có tồn tại không
+    If fileSystem.FolderExists(folderPath) Then
+        ' Lặp qua tất cả các tệp trong thư mục
+        fileName = Dir(folderPath & "*.*") ' Lấy tên tệp đầu tiên
+        Do While fileName <> ""
+            ' Xóa tệp
+            Kill folderPath & fileName
+            ' Lấy tệp tiếp theo
+            fileName = Dir
+        Loop
+    Else
+        MsgBox "Thư mục output không tồn tại!", vbExclamation, "Thông báo"
+    End If
+    
+    ' Giải phóng bộ nhớ
+    Set fileSystem = Nothing
+End Sub
