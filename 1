@@ -1,1 +1,1219 @@
 
+import webbrowser
+import plotly
+import json
+import os
+import shutil
+import numpy as np
+import h5py
+import time
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '0_GUI'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '1_TFS'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '2_BlockedForce'))
+
+import traceback
+from flask import Flask, render_template, request, Response, abort, send_from_directory, escape, send_file,jsonify
+from collections import namedtuple
+from threading import Timer
+import pandas as pd
+import datetime
+import csv
+from openpyxl import load_workbook
+import win32com.client as win32
+
+from synthesis import SynthesisOptions, Plotter, Synthesizer, SynthesisUtility
+
+
+from synthesis import vector_to_csv
+from synthesis import get_response_db_n_labels
+from database_builder import build_database_punch, build_database_csv
+from database_builder_bf import build_database_punch_BlockedForce
+from blockedforce import csv_blockedforce_calculation,pch_blockedforce_calculation, convert_csv_ReactionForce, convert_csv_BodyBlockedForce, interpolate_complex_csv
+
+
+
+if getattr(sys, "frozen", False):
+  exec_dir = os.path.dirname(os.path.abspath(sys.executable))
+  wrkdir = sys._MEIPASS
+elif __file__:
+  exec_dir = os.path.dirname(os.path.abspath(__file__))
+  wrkdir = exec_dir
+  
+GUIdir = os.path.join(os.path.dirname(__file__), '0_GUI')
+template_dir = os.path.join(GUIdir, "templates")
+static_dir = os.path.join(GUIdir, "static")
+current_path_bf = os.path.join(os.path.dirname(__file__), '2_BlockedForce')
+
+class HistoryData:
+  def __init__(self, data, name="history"):
+    self.data = data
+    self.name = name
+    self.in_name_group = False
+
+class HistoryContainer:
+  def __init__(self, capacity=3):
+    self._queue = []
+    self._tempslot = None
+    self._capacity = capacity
+
+  def add(self, name="history"):
+    if len(self._queue) == self._capacity:
+      del self._queue[0]
+    if self._tempslot is not None:
+      self._queue.append(HistoryData(self._tempslot, name))
+      self._tempslot = None
+
+  def preserve(self, data):
+    self._tempslot = data
+
+  def clear(self):
+    self._queue = []
+
+  def _resolve_name_conflicts(self):
+    conflict_counter = {}
+    for hist in self._queue:
+      if hist.name not in conflict_counter:
+        conflict_counter[hist.name] = 0  # no conflict
+      else:
+        conflict_counter[hist.name] += 2 if conflict_counter[hist.name] == 0 else 1  # record the number of histories share the same name
+
+    for idx, hist in enumerate(self._queue[::-1]):  # from latest to oldest
+      if conflict_counter[hist.name] > 0:
+        hist.name = f"{hist.name}[-{idx + 1}]"
+    return  
+
+  def pull(self):
+    if not len(self._queue):
+      return None
+    self._resolve_name_conflicts()
+    return self._queue[::-1]
+
+class AppSession:
+  def __init__(self, history=None, viewing_nid=None, viewing_response_label=None,
+               viewing_type=None, freq_interval=1.0):
+    self.history = history if history is not None else HistoryContainer()
+    self.viewing_nid = viewing_nid
+    self.viewing_response_label = viewing_response_label
+    if viewing_type is None:
+      self.viewing_type = {"result_type": None, "dB": None}
+    else:
+      self.viewing_type = viewing_type
+    self.freq_interval = freq_interval
+    current_path = os.getcwd()
+    for root, dirs, files in os.walk(current_path_bf + "\\"):
+        for file in files:
+            if file.endswith('.csv'):
+                file_path = os.path.join(root, file)
+                os.remove(file_path) 
+app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+
+TFSdir = os.path.join(os.path.dirname(__file__), '1_TFS')
+app.config["UPLOAD_DIR"] = os.path.join(TFSdir, "uploads")
+app.config["DB_DIR"] = os.path.join(TFSdir, "db")
+app.config["RESPONSE_DIR"] = os.path.join(TFSdir, "responses")
+app.config["DOWNLOAD_TOKEN"] = None
+app.config["USER_CLASS"] = "admin"
+_DB_NAME = "database.h5"
+_LOAD_DB_PATH = os.path.join(app.config["DB_DIR"], _DB_NAME)
+_BUILT_DB_PATH = os.path.join(app.config["RESPONSE_DIR"], _DB_NAME)
+_DEFAULT_PRES_REFLEVEL = 2e-11
+_DEFAULT_ACCE_REFLEVEL = 1e-3
+
+sess = AppSession()
+
+def database_exists():
+  if not os.path.exists(app.config["DB_DIR"]):
+    os.makedirs(app.config["DB_DIR"], exist_ok=True)
+  if not os.path.exists(_LOAD_DB_PATH):
+    return False
+  return True
+
+@app.route("/")
+def index():
+  global sess
+  sess = AppSession()
+  opts = SynthesisOptions(_LOAD_DB_PATH)
+  opts.response_id, opts.response_dbname, opts.response_labels = get_response_db_n_labels(opts)
+  opts.target_resp_label = opts.response_labels[0]
+  pres_reflevel, acce_reflevel = _DEFAULT_PRES_REFLEVEL, _DEFAULT_ACCE_REFLEVEL
+  opts.ref_level = acce_reflevel if len(opts.response_labels) > 1 else pres_reflevel
+  if database_exists():
+    synthesizer = Synthesizer(opts)
+    flex_mount_idxs = synthesizer.get_flexible_mount_idxs()
+  else:
+    flex_mount_idxs = []
+  return render_template("index.html", num_mounts=opts.num_mounts,
+                         ftab_default=opts.ftab_default, pres_reflevel=pres_reflevel, acce_reflevel=acce_reflevel,
+                         userclass=app.config["USER_CLASS"], flex_mount_idxs=flex_mount_idxs)
+
+@app.route("/init_graph", methods=["POST"])
+def init_graph():
+  global sess
+  opts = SynthesisOptions(_LOAD_DB_PATH)
+  opts.response_id, opts.response_dbname, opts.response_labels = get_response_db_n_labels(opts)
+  if len(opts.response_labels) > 1:
+    opts.a_weight = False
+  opts.target_resp_label = opts.response_labels[0]
+  pres_reflevel, acce_reflevel = _DEFAULT_PRES_REFLEVEL, _DEFAULT_ACCE_REFLEVEL
+  opts.ref_level = acce_reflevel if len(opts.response_labels) > 1 else pres_reflevel
+  opts.df = 1.0
+  if database_exists():
+    plotter = Plotter(opts)
+    graph_json = json.dumps({"status": True,
+                             "meta": {"resp_labels": opts.response_labels,
+                                      "update_resp_labels": True,
+                                      "num_mounts": opts.num_mounts},
+                             "data": plotter.figure}, cls=plotly.utils.PlotlyJSONEncoder)
+    return graph_json
+      
+
+  if opts.no_cross:
+    sess.viewing_type = {"result_type": "no_cross", "dB": opts.to_db}
+  elif opts.compute_contrib:
+    sess.viewing_type = {"result_type": "contrib", "dB": opts.to_db}
+  else:
+    sess.viewing_type = {"result_type": "full", "dB": opts.to_db}
+  return graph_json
+
+@app.route("/get_rpm_list", methods=["GET"])
+def get_rpm_list():
+  utils = SynthesisUtility(SynthesisOptions(_LOAD_DB_PATH))
+  rpm_list = utils.get_rpm_list()
+  rpm_list = [f"{rpm}RPM" for rpm in rpm_list]
+  return {"rpm_list": rpm_list}
+
+@app.route("/download_waterfall/<format>", methods=["GET", "POST"])
+def download_waterfall(format):
+  if format != "plt" and format != "csv":
+    abort(404)
+  else:
+    inputs = request.get_json()
+    opts = make_synthesis_opts(inputs)
+    if not database_exists():
+      return json.dumps({"status": "nodata", "data": ""})
+
+    try:
+      opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
+      waterfall_creator = SynthesisUtility(opts)
+      if format == "plt":
+        data = waterfall_creator.generate_plt_data()
+      else:
+        data = waterfall_creator.generate_csv_waterfall_data()
+      return json.dumps({"status": "ok", "data": data})
+    except Exception as err:
+      err_msg = type(err).__name__  + ": " + str(err)
+      print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
+      data = type(err).__name__  + ": " + str(err) + "".join(traceback.format_tb(err.__traceback__))
+      return json.dumps({"status": "error", "data": data})
+
+def make_synthesis_opts(inputs):
+    opts = SynthesisOptions(_LOAD_DB_PATH, no_cross=inputs["no_cross"], compute_contrib=inputs["compute_contrib"])
+    if inputs["no_rot"]:
+      opts.num_dofs = 3
+    if inputs["rpm"] is not None and len(inputs["rpm"]) > 3:
+      opts.rpm = int(inputs["rpm"][:-3])
+    
+    opts.response_id = int(inputs["response_id"]) if inputs["response_id"] else None
+    opts.target_resp_label = inputs["target_resp_label"]
+    opts.to_3rd_oct = inputs["oct3rd"]
+    opts.response_id, opts.response_dbname, opts.response_labels = get_response_db_n_labels(opts)
+    if opts.response_labels is not None and opts.target_resp_label not in opts.response_labels:
+      opts.target_resp_label = opts.response_labels[0]
+    if len(opts.response_labels) > 1:
+      opts.a_weight = False
+    else:
+      opts.a_weight = inputs["a_weight"]
+    
+    opts.set_tf_factors("avl_mount", inputs["avl_mount_factors"])
+    opts.set_tf_factors("engine_mount", inputs["engine_mount_factors"])
+    opts.set_tf_factors("body_mount", inputs["body_mount_factors"])
+    opts.set_tf_factors("body_target", inputs["body_target_factors"])
+    opts.set_tf_factors("mount", inputs["mount_factors"])
+    opts.to_db = inputs["show_db"]
+    opts.df = float(inputs["df"])
+    return opts
+    
+@app.route("/update_graph", methods=['GET', 'POST'])
+def update_graph():
+  inputs = request.get_json()
+  if inputs["no_cross"]:
+    request_display_type = "no_cross"
+  elif inputs["compute_contrib"]:
+    request_display_type = "compute_contrib"
+  else:
+    request_display_type = "full"
+
+  opts = make_synthesis_opts(inputs)
+
+  if not database_exists():
+    plotter = Plotter(opts)
+    graph_json = json.dumps({"status": True,
+                             "meta": {"resp_labels": [],
+                                      "update_resp_labels": True,
+                                      "num_mounts": opts.num_mounts},
+                             "data": plotter.figure}, cls=plotly.utils.PlotlyJSONEncoder)
+    return graph_json
+
+  try:
+    is_current_display_node = opts.response_id == sess.viewing_nid
+    
+    
+    if not is_current_display_node:
+      opts.target_resp_label = opts.response_labels[0]
+      
+    opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
+
+    synthesizer = Synthesizer(opts)
+    Asyn, Atrue, _, _, freq = synthesizer.synthesize()
+    plot_row_heights = [400, 800, 300]
+
+    opts.plot_row_height = plot_row_heights[int(inputs["chart_height"])]
+    is_current_display_type = request_display_type == sess.viewing_type["result_type"]
+    is_current_display_result_comp = opts.target_resp_label == sess.viewing_response_label
+    is_same_freq_interval = int(opts.df * 1e5) == int(sess.freq_interval * 1e5)
+    
+    sess.viewing_type["result_type"] = request_display_type
+    sess.viewing_nid = opts.response_id
+    sess.viewing_response_label = opts.target_resp_label
+    sess.freq_interval = opts.df
+    print("result_type")    
+    print(request_display_type)  
+    
+    if (not is_current_display_type or not is_current_display_node or not is_current_display_result_comp
+        or not is_same_freq_interval):
+      sess.history.clear()
+    sess.history.preserve(Asyn)
+
+    Asyn_history = None if not inputs["show_history"] else sess.history.pull()
+    plotter = Plotter(opts)
+    
+    print("freq")    
+    print(freq)  
+
+    print("Asyn")    
+    print(Asyn)  
+
+    print("Atrue")    
+    print(Atrue)     
+    
+    print("Asyn_history")    
+    print(Asyn_history)  
+
+    
+    fig = plotter.generate_synthesis_plot(freq, Asyn, Atrue, Asyn_history)
+
+    if is_current_display_type and is_current_display_node:
+      invisible_groups = inputs["invisible_groups"]
+      for trace in fig.data:
+        if trace.legendgroup in invisible_groups:
+          trace.visible = "legendonly"
+      if is_current_display_result_comp:
+        fig.update_xaxes(range=inputs["zoom_range"]["xrange"])
+        if sess.viewing_type["dB"] == opts.to_db:
+          fig.update_yaxes(row=1, col=1, range=inputs["zoom_range"]["yrange"])
+
+    sess.viewing_type["dB"] = opts.to_db
+
+    graph_json = json.dumps({"status": True,
+                             "meta": {"resp_labels": opts.response_labels,
+                                      "update_resp_labels": not is_current_display_node,
+                                      "num_mounts": opts.num_mounts},
+                             "data": fig}, cls=plotly.utils.PlotlyJSONEncoder)
+  except Exception as err:
+    err_msg = type(err).__name__  + ": " + str(err) + "".join(traceback.format_tb(err.__traceback__))
+    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
+    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
+    return graph_json
+  return graph_json
+
+@app.route("/download_misc", methods=['GET', 'POST'])
+def download_misc_data():
+  inputs = request.get_json()
+  opts = make_synthesis_opts(inputs)
+  if not database_exists():
+    return json.dumps({"status": "nodata", "data": ""})
+  
+  try:
+    opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
+    synthesizer = Synthesizer(opts)
+    _, _, rf, Aem, freq = synthesizer.synthesize()
+    
+    with open(os.path.join(app.config["RESPONSE_DIR"], "data.csv"), "w+", encoding="utf-8") as csv:
+      if inputs["request_name"] == "rf":
+        data = vector_to_csv(rf, freq, opts, vtype="force")
+      else:
+        data = vector_to_csv(Aem, freq, opts, vtype="accel")
+      data.to_csv(csv, line_terminator="\n")
+      csv.seek(0)
+      return json.dumps({"status": "ok", "data": csv.read()})
+  except Exception as err:
+    err_msg = type(err).__name__  + ": " + str(err)
+    print(err_msg)
+    return json.dumps({"status": "error", "data": err_msg})
+
+@app.route("/download", methods=['GET', 'POST'])
+def download_csv():
+  inputs = request.get_json()
+  opts = make_synthesis_opts(inputs)
+  if not database_exists():
+    return json.dumps({"status": "nodata", "data": ""})
+
+  Asyn_history = None if not inputs["show_history"] else sess.history.pull()
+  try:
+    opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
+    with open(os.path.join(app.config["RESPONSE_DIR"], "data.csv"), "w+", encoding="utf-8") as csv:
+      csv_generator = SynthesisUtility(opts)
+      data = csv_generator.to_dataframe(Asyn_history)
+      data.to_csv(csv, line_terminator="\n")
+      csv.seek(0)
+      return json.dumps({"status": "ok", "data": csv.read()})
+  except Exception as err:
+    err_msg = type(err).__name__  + ": " + str(err)
+    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
+    return json.dumps({"status": "error", "data": err_msg})
+
+@app.route("/add_history", methods=['GET', 'POST'])
+def add_history():
+  inputs = request.get_json()
+  opts = SynthesisOptions(_LOAD_DB_PATH)
+
+  if not database_exists():
+    return {"status": "nodata"}
+  
+  if inputs["signal"] == "add":
+    sess.history.add(inputs["name"])
+  return {"status": "ok"}
+
+@app.route("/load_db", methods=["POST"])
+def load_db():
+  files = request.files.getlist("file")
+  filenames = upload_files(files, "db", fix_filename=_DB_NAME)
+  shutil.copy(filenames[0], _LOAD_DB_PATH)
+  os.unlink(filenames[0])
+  global sess
+  sess = AppSession()
+  return {"status": True}
+
+@app.route("/clear_db", methods=["POST"])
+def clear_db():
+    inputs = request.get_json()
+    if inputs["signal"] == "clear" and os.path.exists(_LOAD_DB_PATH):
+        os.unlink(_LOAD_DB_PATH)
+    global sess
+    sess = AppSession()
+    return {"status": True}
+
+@app.route("/create_db", methods=["POST"])
+def create_db():
+   
+  k = int(request.form["BodySideType"])
+  print("BodySideType k = ")
+  print(k) 
+  k_mount = int(request.form["MountParaFile_yesno"])
+  print("MountParaFile_yesno k_mount = ")  
+  print(k_mount)  
+  if k==1 :
+    files = request.files.getlist("bodyPchFiles")
+    body_files_pch = upload_files(files, "body_upload_pch", fix_filename=None) 
+  if k==2 :
+    files = request.files.getlist("bodyPchFiles")
+    body_files_csv = upload_files(files, "body_upload_csv", fix_filename=None)
+    convert_csv(body_files_csv)
+    csv_file_path = current_path + "\\uploads\\body_csv\\"
+    # Lấy danh sách tên file/thư mục trong folder_path
+    items = os.listdir(csv_file_path)
+    # Tạo danh sách đường dẫn đầy đủ
+    body_files_csv_converted = [os.path.join(csv_file_path, item) for item in items]
+      
+      
+  files = request.files.getlist("enPchFiles")
+  eng_files = upload_files(files, "engine", fix_filename=None)
+  
+  files = request.files.getlist("avlFiles")
+  avl_files = upload_files(files, "avl", fix_filename=None)  
+  num_mounts = int(request.form["numMounts"])
+
+  model_name = request.form["modelName"]
+  
+  raw_post_data = request.form["loadAtFinish"]
+  load_at_finish = raw_post_data.lower() == "true"
+
+  raw_post_data = request.form["engMountIds"]
+  eng_mount_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
+
+  raw_post_data = request.form["bodyMountIds"]
+  body_mount_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
+
+  raw_post_data = request.form["avlMountIds"]
+  avl_mount_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
+  
+  files = request.files.getlist("MountParamFiles")
+  mount_files = upload_files(files, "mount_parameter", fix_filename=None)
+  mount_files_str = ''.join(str(x) for x in mount_files)  
+  if k_mount==1 :
+    with open(mount_files_str, 'r', encoding='utf-8') as f:
+        mount_params = json.load(f)
+#    print("mount_params")     
+#    print(mount_params) 
+  if k_mount==2 :
+    raw_post_data = request.form["mountParams"]
+    mount_params = json.loads(raw_post_data)
+
+
+  raw_post_data = request.form["responseId"]
+  response_ids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
+
+  remarks = request.form["remarks"]
+
+  raw_post_data = request.form["engineAngles"]
+  engine_angles = list(map(lambda x: float(x.strip()), raw_post_data.split(",")))
+
+  opts = SynthesisOptions(_LOAD_DB_PATH)
+  if len(eng_mount_nids) != len(body_mount_nids) or len(eng_mount_nids) != len(avl_mount_nids) or len(eng_mount_nids) != num_mounts:
+    return {"status": False, "download_token": None}
+
+  node_ids = np.vstack([eng_mount_nids, body_mount_nids, avl_mount_nids]).astype(np.int64)
+
+
+  db_path = os.path.join(app.config['RESPONSE_DIR'], _DB_NAME)
+  if k==1 :
+    build_database_punch(db_path, num_mounts, model_name, eng_files[0], body_files_pch[0], avl_files,
+                 mount_params, node_ids, response_ids, engine_angles, remarks, "dynamic-stiffness")
+  if k==2 :                 
+    build_database_csv(db_path, num_mounts, model_name, eng_files[0], body_files_csv_converted, avl_files,
+                 mount_params, node_ids, response_ids, engine_angles, remarks, "dynamic-stiffness")
+
+  if load_at_finish:
+    shutil.copy(db_path, _LOAD_DB_PATH)
+
+
+  download_token = str(int(time.time()))
+  app.config["DOWNLOAD_TOKEN"] = download_token
+  return {"status": True, "downloadToken": download_token}
+
+@app.route("/get_db_info", methods=["POST", "GET"])
+def get_db_info():
+  opts = SynthesisOptions(_LOAD_DB_PATH)
+  dbinfo = {"model_name": "",
+            "num_mounts": 3,
+            "eng_pch": None,
+            "body_pch": None,
+            "engine_angles": [],
+            "response_id": [],
+            "avl_nids": [],
+            "eng_nids": [],
+            "body_nids": [],
+            "rpm_list": [],
+            "mount_params": {},
+            "remarks": "",
+            "mount_param_type": "kelvin-voigt",
+            "flex_mount_idxs": []
+            }
+  if not database_exists():
+    return json.dumps({"status": "nodata", "data": dbinfo})
+
+  with h5py.File(opts.database, "r") as db:
+    if "model_name" in db.attrs:
+      dbinfo["model_name"] = escape(db.attrs["model_name"])
+
+    if "eng_pch" in db.attrs:
+      dbinfo["eng_pch"] = escape(db.attrs["eng_pch"])
+
+    if "body_pch" in db.attrs:
+      dbinfo["body_pch"] = escape(db.attrs["body_pch"])
+
+    if "response_id" in db.attrs:
+      if db.attrs["response_id"].size == 1:
+        dbinfo["response_id"] = [db.attrs["response_id"].item()]
+      else:
+        dbinfo["response_id"] = db.attrs["response_id"].tolist()
+
+    if "num_mounts" in db.attrs:
+      dbinfo["num_mounts"] = db.attrs["num_mounts"].item()
+
+    db_response_ids = {"response_id_aco": [],
+                       "response_id_eng": [],
+                       "response_id_body": []}
+
+    for keyname in db_response_ids.keys():
+      attr_name = "response_id" if keyname == "response_id_aco" else keyname
+      if attr_name in db.attrs:
+        if isinstance(db.attrs[attr_name], np.int64) and db.attrs[attr_name].size == 1:
+          db_response_ids[keyname] = [db.attrs[attr_name].item()]
+        elif isinstance(db.attrs[attr_name], np.ndarray):
+          db_response_ids[keyname] = db.attrs[attr_name].tolist()
+
+    dbinfo["response_id"] = (db_response_ids["response_id_aco"] + db_response_ids["response_id_eng"] + db_response_ids["response_id_body"])
+
+    if "engine_angles" in db.attrs:
+      dbinfo["engine_angles"] = db.attrs["engine_angles"].tolist()
+
+    if "remarks" in db.attrs:
+      dbinfo["remarks"] = escape(db.attrs["remarks"])
+
+    dbinfo["eng_nids"] = db["/NODE_IDS"]["eng_nids"][:].tolist()
+    dbinfo["body_nids"] = db["/NODE_IDS"]["body_nids"][:].tolist()
+    
+    avl_nids = db["/NODE_IDS"]["avl_nids"][:].tolist()
+    dbinfo["avl_nids"] = avl_nids
+
+    rpm_list = [int(rpm[:-3]) for rpm in db["/AVLMount"].keys()]
+    rpm_list.sort()
+    dbinfo["rpm_list"] = rpm_list
+
+    if "mount_param_type" in db.attrs:
+      dbinfo["mount_param_type"] = db.attrs["mount_param_type"]
+
+    mount_params = dbinfo["mount_params"]
+    flex_mount_idxs = []
+    if dbinfo["mount_param_type"] == "kelvin-voigt":
+      dbmount = db["/MOUNT_PARAMS"]
+      for nid in avl_nids:
+        mount_params[nid] = {
+                "sls": {"c1": dbmount[f"{nid}.sls.c1"][0].item(),
+                        "c2": dbmount[f"{nid}.sls.c2"][0].item(),
+                        "d1": dbmount[f"{nid}.sls.d1"][0].item()
+                        },
+                "ftab": {"kx": dbmount[f"{nid}.ftab.kx"][0].item(),
+                         "ky": dbmount[f"{nid}.ftab.ky"][0].item(),
+                         "kz": dbmount[f"{nid}.ftab.kz"][0].item(),
+                         }
+            }
+      flex_mount_idxs = [idx for idx in range(len(avl_nids))]
+    else:
+      axis_labels = ("TX", "TY", "TZ", "RX", "RY", "RZ")
+      for idx, nid in enumerate(avl_nids):
+        mount_group = f"/MountParams/n{nid}"
+        group = db[mount_group]
+        if group.attrs["mount_type"] == "rigid":
+          mount_params[nid] = {"mount_type": "rigid",
+                               "matrix_type": "none",
+                               "fixed_in_excite": True,
+                               "dyn_stiffness": {}}
+        else:
+          flex_mount_idxs.append(idx)
+          mount_params[nid] = {"mount_type": "flexible",
+                               "matrix_type": group.attrs.get("matrix_type", "symm"),
+                               "fixed_in_excite": bool(group.attrs.get("fixed_in_excite", True)),
+                               "dyn_stiffness": {}}
+          dyn_stiffness = mount_params[nid]["dyn_stiffness"] 
+          for _, target_axis_label in enumerate(axis_labels):
+            for _, source_axis_label in enumerate(axis_labels):
+              dset_name = f"{target_axis_label}-{source_axis_label}"
+              if dset_name not in group:
+                continue
+              dbmount = group[dset_name]
+              dyn_stiffness[dset_name] = dbmount[:].tolist()
+    dbinfo["flex_mount_idxs"] = flex_mount_idxs
+  return json.dumps({"status": "ok", "data": dbinfo})
+
+@app.route("/download/<mode>/<download_token>")
+def download_db(mode, download_token):
+  if mode == "creation":
+    path = _BUILT_DB_PATH
+  elif mode == "backup":
+    path = _LOAD_DB_PATH
+  else:
+    app.config["DOWNLOAD_TOKEN"] = None
+    abort(404)
+
+  if os.path.exists(path) and download_token == app.config["DOWNLOAD_TOKEN"]:
+    app.config["DOWNLOAD_TOKEN"] = None
+    return send_from_directory(os.path.dirname(path), _DB_NAME, as_attachment=True)
+  else:
+    app.config["DOWNLOAD_TOKEN"] = None
+    abort(404)
+
+@app.route("/backup_db", methods=["POST"])
+def backup_db():
+  inputs = request.get_json()
+  if inputs["signal"] != "backup":
+    return json.dumps({"status": "wrong-signal", "downloadToken": None})
+            
+  if os.path.exists(_LOAD_DB_PATH):
+    download_token = str( int(time.time()) )
+    app.config["DOWNLOAD_TOKEN"] = download_token
+    return json.dumps({"status": "ok", "downloadToken": download_token})
+  
+  return json.dumps({"status": "nodata", "downloadToken": None})
+
+def upload_files(files, subdir=None, fix_filename=None):
+  filenames = []
+  upload_dir = app.config['UPLOAD_DIR']
+  if subdir is not None:
+    upload_dir = os.path.join(upload_dir, subdir)
+    if not os.path.exists(upload_dir):
+      os.makedirs(upload_dir, exist_ok=True)
+
+  for file in files:
+    save_to = os.path.join(upload_dir, fix_filename if fix_filename is not None else file.filename)
+    file.save(save_to)
+    filenames.append(save_to)
+  return filenames
+
+def open_browser():
+  webbrowser.open_new("http://127.0.0.1:5000")
+
+def safe_float(x):
+    try:
+        return float(x)
+    except:
+        return 0.0  # hoặc np.nan hoặc giá trị mặc định bạn muốn
+
+  
+def convert_csv(file_list):
+    parts =[]
+    # Danh sách tên file CSV
+    """
+    file_list = ['BodyMount_N1000_FX_FY_FZ_MX_MY_MZ.csv', 'BodyMount_N1001_FX_FY_FZ_MX_MY_MZ.csv',
+                    'BodyMount_N1002_FX_FY_FZ_MX_MY_MZ.csv', 'BodyMount_N1003_FX_FY_FZ_MX_MY_MZ.csv',
+                    'BodyMount_N1004_FX_FY_FZ_MX_MY_MZ.csv']
+    """
+    # Lấy đường dẫn hiện tại
+    current_path = os.getcwd()  
+
+    body_response_nids = []
+    body_microphone_response_nids = []
+    microphone_response_nids = [] 
+
+    with open(file_list[0], 'r', encoding='utf-8') as f:
+      column_line = f.readline().strip()
+    column = column_line.split(',')
+        
+        
+    for k in range(1,int(len(column))):     
+      
+        nid = column[k].split(".")[0]
+        wrench = column[k].split(".")[1]
+        lbl = column[k].split(".")[2]
+        MagPhase = column[k].split(".")[3]
+        if wrench =="FX" and lbl == "ax" and MagPhase=="Mag":
+            body_response_nids.append(int(nid))
+        if wrench =="FX" and lbl == "px" and MagPhase=="Mag":            
+            microphone_response_nids.append(int(nid)) 
+
+    rpm=0  
+    bodydata = {}
+    bodydata_body = {}
+    column_names = {}
+    column_names_body = {}       
+
+    for file_name in file_list:   
+        base_name = os.path.splitext(os.path.basename(file_name))[0]  # 'BodyMount_N1000_FX_FY_FZ_MX_MY_MZ'        
+        parts = base_name .split("_")  # tách chuỗi thành danh sách các phần tử  
+
+        FX = parts[0] + "_"+  parts[1]  + "_"+ parts[2] + ".csv"
+        FY = parts[0] + "_"+  parts[1]  + "_"+ parts[3] + ".csv"
+        FZ = parts[0] + "_"+  parts[1]  + "_"+ parts[4] + ".csv"
+        MX = parts[0] + "_"+  parts[1]  + "_"+ parts[5] + ".csv"
+        MY = parts[0] + "_"+  parts[1]  + "_"+ parts[6] + ".csv"
+        MZ = parts[0] + "_"+  parts[1]  + "_"+ parts[7] + ".csv"
+        t=0
+        for wrench in [FX,FY,FZ,MX,MY,MZ]:
+            k=0    
+            data = pd.read_csv(file_name).to_numpy()   
+            rpm = 0        
+            bodydata[rpm] = []
+            column_names[rpm] = []  
+            for item_microphone_response in microphone_response_nids:
+                body_freq = data[:, 0]
+                body_resp_3 = data[:, 12*k+1+2*t]
+                body_resp_4 = data[:, 12*k+2+2*t]
+                body_resp = body_resp_3 * np.cos(np.radians(body_resp_4)) + 1.j * body_resp_3 * np.sin(np.radians(body_resp_4))
+                body_resp_1 = body_resp.real
+                body_resp_2 = body_resp.imag        
+                k=k+1
+                axis = "px"
+                new_colnames_1 = [f"{item_microphone_response}.{axis}.{comp}" for comp in ("R", "I", "Mag", "Phase")]
+                
+                if len(bodydata[rpm]):
+                    bodydata[rpm].extend([body_resp_1, body_resp_2,body_resp_3, body_resp_4])
+                    column_names[rpm].extend(new_colnames_1)
+                else:
+                    bodydata[rpm].append([body_freq,body_resp_1,body_resp_2,body_resp_3, body_resp_4])
+                    column_names[rpm].extend(["freq"] + new_colnames_1)
+  
+            line= 12*k
+            bodydata_body[rpm] = []
+            column_names_body[rpm] = []    
+            k=0            
+            for item_body_response in body_response_nids:  
+                new_colnames_2= [u + c
+                                   for u in [f"{item_body_response}.ax", f"{item_body_response}.ay", f"{item_body_response}.az", f"{item_body_response}.rx", f"{item_body_response}.ry", f"{item_body_response}.rz"]
+                                   for c in [".R", ".I", ".Mag", ".Phase"]
+                                   ]   
+                 
+                column_names_body[rpm].extend(new_colnames_2)                
+                for i in range(0, 6):
+                    body_freq = data[:, 0]
+                    body_resp_3 = data[:, line+12*k+1+2*t]
+                    body_resp_4 = data[:, line+12*k+2+2*t]
+                    
+                    body_resp = body_resp_3 * np.cos(np.radians(body_resp_4)) + 1.j * body_resp_3 * np.sin(np.radians(body_resp_4))
+                    body_resp_1 = body_resp.real
+                    body_resp_2 = body_resp.imag  
+                    k=k+1                    
+                    bodydata_body[rpm].extend([body_resp_1, body_resp_2,body_resp_3, body_resp_4])
+                    
+            bodydata[rpm].extend(bodydata_body[rpm]) 
+            column_names[rpm].extend(column_names_body[rpm])            
+            for rpm, data in bodydata.items():
+                collated_data = pd.DataFrame(np.vstack(data).T, columns=column_names[rpm])
+                
+            csv_file_path = current_path + "\\uploads\\body_csv\\" +  wrench
+
+            collated_data.to_csv(csv_file_path, index=False)
+            t=t+1
+
+#############################################################
+current_path = os.getcwd()
+def delete_csv_ini(folder_path):
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            if file.endswith('.csv'):
+                file_path = os.path.join(root, file)
+                os.remove(file_path)
+
+@app.route("/init_graph_BlockedForce", methods=["POST"])
+def init_graph_BlockedForce():
+  global sess
+  delete_csv_ini(current_path_bf + "\\")
+  opts = SynthesisOptions(_LOAD_DB_PATH)
+  opts.response_id, opts.response_dbname, opts.response_labels = get_response_db_n_labels(opts)
+  if len(opts.response_labels) > 1:
+    opts.a_weight = False
+  opts.target_resp_label = opts.response_labels[0]
+  pres_reflevel, acce_reflevel = _DEFAULT_PRES_REFLEVEL, _DEFAULT_ACCE_REFLEVEL
+  opts.ref_level = acce_reflevel if len(opts.response_labels) > 1 else pres_reflevel
+  opts.df = 1.0
+  if not database_exists():
+    plotter = Plotter(opts)
+    graph_json = json.dumps({"status": True,
+                             "meta": {"resp_labels": opts.response_labels,
+                                      "update_resp_labels": True,
+                                      "num_mounts": opts.num_mounts},
+                             "data": plotter.figure}, cls=plotly.utils.PlotlyJSONEncoder)
+    return graph_json
+      
+  try:
+    synthesizer = Synthesizer(opts)
+    Asyn, Atrue, _, _, freq = synthesizer.synthesize()
+  
+    
+    sess.history.preserve(Asyn)
+    plotter = Plotter(opts)
+    fig = plotter.generate_synthesis_plot(freq, Asyn, Atrue)
+    graph_json = json.dumps({"status": True,
+                             "meta": {"resp_labels": opts.response_labels,
+                                      "update_resp_labels": True,
+                                      "num_mounts": opts.num_mounts},
+                             "data": fig}, cls=plotly.utils.PlotlyJSONEncoder)
+    sess.viewing_nid = opts.response_id
+    sess.viewing_response_label = opts.target_resp_label
+  except Exception as err:
+    err_msg = type(err).__name__  + ": " + str(err)
+    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
+    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
+
+  if opts.no_cross:
+    sess.viewing_type = {"result_type": "no_cross", "dB": opts.to_db}
+  elif opts.compute_contrib:
+    sess.viewing_type = {"result_type": "contrib", "dB": opts.to_db}
+  else:
+    sess.viewing_type = {"result_type": "full", "dB": opts.to_db}
+  return graph_json
+  
+
+@app.route('/save_mount_csv', methods=['POST'])
+def save_mount_csv():
+    raw_post_data = request.form.get("mountParams")
+    mount_params = json.loads(raw_post_data)
+
+    save_folder = os.path.join(os.getcwd(), 'Mount_parameter')
+    os.makedirs(save_folder, exist_ok=True)
+
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")  # Ví dụ: 20250730_164558
+
+    file_name = f"mount_params_{timestamp}.txt"
+
+    file_path = os.path.join(save_folder,file_name)
+    print(file_path)
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(mount_params, f, ensure_ascii=False, indent=2)
+
+    return{"status": True, "save_folder": save_folder, "file_name": file_name}
+
+@app.route("/create_db_BlockedForce", methods=["POST"])
+def create_db_BlockedForce():
+  os.makedirs(current_path_bf + "\\0_bf_reactionforce_csv_temp", exist_ok=True)    
+  os.makedirs(current_path_bf + "\\0_bf_body_blocked_force_csv_temp", exist_ok=True)  
+  k = int(request.form["BF_BodySideType"])
+  print("BF_BodySideType k = ")
+  print(k) 
+  raw_post_data = request.form["BF_responseId"]
+  responseId_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
+  print("responseId_nids")
+  print(responseId_nids)  
+  dbinfo = {"response_id": []}
+  dbinfo["response_id"] =responseId_nids
+  files = request.files.getlist("BF_ReactionForceFiles")
+  bf_reactionForce_files = upload_files(files, current_path_bf + "\\0_bf_reactionforce_csv_temp", fix_filename=None)   
+  convert_csv_ReactionForce(bf_reactionForce_files)  
+  if k==1 :
+    os.makedirs(current_path_bf + "\\db", exist_ok=True)        
+    files = request.files.getlist("BF_bodyFiles")
+    bf_body_files_pch = upload_files(files, current_path_bf + "\\0_bf_body_blocked_force_pch", fix_filename=None) 
+    raw_post_data = request.form["BF_bodymountId"]
+    bf_body_mount_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))    
+    print("bf_body_mount_nids")
+    print(bf_body_mount_nids)    
+    node_ids = np.vstack([bf_body_mount_nids]).astype(np.int64)
+    build_database_punch_BlockedForce(bf_body_files_pch[0], node_ids, responseId_nids)    
+    pch_blockedforce_calculation()
+      
+  if k==2 :
+    files = request.files.getlist("BF_bodyFiles")
+    bf_body_files_csv = upload_files(files, current_path_bf + "\\0_bf_body_blocked_force_csv_temp", fix_filename=None)
+    convert_csv_BodyBlockedForce(bf_body_files_csv)
+    csv_blockedforce_calculation() 
+  shutil.rmtree(current_path_bf + "\\0_bf_reactionforce_csv_temp")
+  shutil.rmtree(current_path_bf + "\\0_bf_body_blocked_force_csv_temp")  
+  shutil.rmtree(current_path_bf + "\\db")  
+  raw_post_data = request.form.get("BF_loadAtFinish", "false")
+  load_at_finish = raw_post_data.lower() == "true"
+  
+
+  return {"status": True, "data": dbinfo}
+
+@app.route("/update_graph_BlockedForce", methods=['GET', 'POST'])
+def update_graph_BlockedForce():
+
+  inputs = request.get_json()
+
+  if inputs["no_cross"]:
+    request_display_type = "no_cross"
+  elif inputs["compute_contrib"]:
+    request_display_type = "compute_contrib"
+  else:
+    request_display_type = "full"  
+  
+  opts = make_synthesis_opts(inputs)
+  result_type_1 = inputs["r1"]    
+  result_type_2 = inputs["r2"]
+  result_type_3 = inputs["r3"] 
+  result_type_4 = inputs["r4"] 
+
+  freq_step = inputs["df_2"]
+  print("freq_step")
+  print(freq_step)  
+  input_folder = current_path_bf + '\\3_SPL_BF\\'
+  output_folder = current_path_bf + '\\5_SPL_BF_changefreq\\'  
+  interpolate_complex_csv(input_folder,output_folder, float(freq_step))    
+  try:     
+    Atrue = None
+    plot_row_heights = [400, 800, 300]
+    opts.plot_row_height = plot_row_heights[int(inputs["chart_height"])]
+    Asyn_history = None
+    plotter = Plotter(opts)
+    folder_path = current_path_bf + '\\3_SPL_BF'  # Thay bằng đường dẫn thư mục chứa file CSV
+    folder_path_Octave = current_path_bf + '\\4_SPL_BF_3rdOctave'
+    folder_path_changefreq = current_path_bf + '\\5_SPL_BF_changefreq'    
+    freq = None
+    value = []
+
+    # Lấy danh sách file CSV trong thư mục
+    file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
+
+    for file_name in file_list:
+        file_path = os.path.join(folder_path, file_name)
+        file_path_Octave = os.path.join(folder_path_Octave, file_name) 
+        file_path_changefreq = os.path.join(folder_path_changefreq, file_name)         
+        df = pd.read_csv(file_path)
+        df_Octave = pd.read_csv(file_path_Octave)
+        df_changefreq = pd.read_csv(file_path_changefreq)        
+        # Lấy cột 1 (freq) nếu chưa lấy
+        if result_type_1 == 1 :
+            freq = df_changefreq.iloc[:, 0].tolist()            
+            value_col = df_changefreq.iloc[:, int(2)].apply(safe_float)
+        if result_type_2 == 1 :
+            freq = df_changefreq.iloc[:, 0].tolist()             
+            value_col = df_changefreq.iloc[:, int(3)].apply(safe_float)        
+        if result_type_3 == 1 :
+            freq = df_changefreq.iloc[:, 0].tolist()             
+            value_col = df_changefreq.iloc[:, int(4)].apply(safe_float) 
+        if result_type_4 == 1 :
+            freq = df_Octave.iloc[:, 0].tolist()             
+            value_col = df_Octave.iloc[:, int(1)].apply(safe_float)            
+        value.append(value_col.tolist())
+    micro_list = []
+    for f in os.listdir(folder_path):
+        full_path = os.path.join(folder_path, f)
+        if os.path.isfile(full_path):
+            name_without_ext = os.path.splitext(f)[0]
+            micro_list.append(name_without_ext)
+    df = pd.DataFrame({'freq': freq})
+
+    # Thêm các cột dữ liệu cho từng micro
+    for i, micro_name in enumerate(micro_list):
+        # Kiểm tra độ dài value[i] có bằng độ dài freq không
+        if len(value[i]) != len(freq):
+            print(f"Warning: length mismatch for micro {micro_name}")
+        df[micro_name] = value[i]
+
+    currently_microphone= inputs["currently_microphone"] 
+
+    
+    freq_1 = freq
+    Asyn_1 = df[currently_microphone]
+    fig = plotter.generate_synthesis_plot_BF(freq_1, Asyn_1, Atrue, Asyn_history)
+    
+    if result_type_1 == 1:  
+        fig.update_xaxes(range=[0, 2000])
+        fig.update_yaxes(row=1, col=1, range=[0, 1e-7])
+    if result_type_2 == 1:  
+        fig.update_xaxes(range=[0, 2000])
+        fig.update_yaxes(row=1, col=1, range=[-40, 75])
+    if result_type_3 == 1:  
+        fig.update_xaxes(range=[0, 2000])
+        fig.update_yaxes(row=1, col=1, range=[-40, 75])            
+            
+    graph_json = json.dumps({"status": True,
+                             "meta": {"resp_labels": "",
+                                      "update_resp_labels": "",
+                                      "num_mounts": ""},
+                             "data": fig}, cls=plotly.utils.PlotlyJSONEncoder)
+  except Exception as err:
+    print("exception")  
+    err_msg = type(err).__name__  + ": " + str(err) + "".join(traceback.format_tb(err.__traceback__))
+    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
+    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
+    return graph_json
+  return graph_json
+
+@app.route('/export_csv_bf', methods=['GET', 'POST'])
+def export_csv_bf():
+    inputs = request.get_json()
+
+    result_type_1 = inputs["r1"]    
+    result_type_2 = inputs["r2"]
+    result_type_3 = inputs["r3"]   
+    result_type_4 = inputs["r4"]       
+    microphone_id = inputs["response_allnodeid"]
+
+    print("microphone_id =")    
+    print(microphone_id)   
+
+    folder_path = current_path_bf + '\\3_SPL_BF'  # Thay bằng đường dẫn thư mục chứa file CSV
+    folder_path_Octave = current_path_bf + '\\4_SPL_BF_3rdOctave'
+    folder_path_changefreq = current_path_bf + '\\5_SPL_BF_changefreq'    
+    freq = None
+    value = []
+    file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
+  
+    
+    for file_name in file_list:
+        file_path = os.path.join(folder_path, file_name)
+        file_path_Octave = os.path.join(folder_path_Octave, file_name) 
+        file_path_changefreq = os.path.join(folder_path_changefreq, file_name)         
+        df = pd.read_csv(file_path)
+        df_Octave = pd.read_csv(file_path_Octave)
+        df_changefreq = pd.read_csv(file_path_changefreq)   
+
+        if result_type_1 == 1 :
+            result_type ="MPa"
+            freq = df_changefreq.iloc[:, 0].tolist()            
+            value_col = df_changefreq.iloc[:, int(2)].apply(safe_float)
+        if result_type_2 == 1 :
+            result_type ="dB"            
+            freq = df_changefreq.iloc[:, 0].tolist()             
+            value_col = df_changefreq.iloc[:, int(3)].apply(safe_float)        
+        if result_type_3 == 1 :
+            result_type ="dBA"              
+            freq = df_changefreq.iloc[:, 0].tolist()             
+            value_col = df_changefreq.iloc[:, int(4)].apply(safe_float) 
+        if result_type_4 == 1 :
+            result_type ="dBA_OneThirdOctaveband"              
+            freq = df_Octave.iloc[:, 0].tolist()             
+            value_col = df_Octave.iloc[:, int(1)].apply(safe_float)  
+        value.append(value_col.tolist())
+
+    micro_list = []
+
+    for f in os.listdir(folder_path):
+        full_path = os.path.join(folder_path, f)
+        if os.path.isfile(full_path):
+            name_without_ext = os.path.splitext(f)[0]
+            micro_list.append(name_without_ext)
+        
+    df = pd.DataFrame({'freq': freq})
+
+    # Thêm các cột dữ liệu cho từng micro
+    for i, micro_name in enumerate(micro_list):
+        # Kiểm tra độ dài value[i] có bằng độ dài freq không
+        if len(value[i]) != len(freq):
+            print(f"Warning: length mismatch for micro {micro_name}")
+        df[micro_name] = value[i]
+
+  
+    
+    currently_microphone= inputs["currently_microphone"] 
+    print("currently_microphone")
+    print(currently_microphone)  
+
+    
+    freq_1 = freq
+    Asyn_1 = df[currently_microphone]
+
+    df = pd.DataFrame({
+        'freq': freq_1,
+        'Asyn': Asyn_1
+    })
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+    # Xuất ra file CSV
+
+    
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")  # Ví dụ: 20250730_164558
+    
+    
+    save_folder = current_path_bf + "\\BlockedForce_Output"
+    file_name = currently_microphone + "_" + result_type + "_" + timestamp + ".csv"
+    file_path = save_folder + "\\" + file_name
+    df.to_csv(file_path, index=False)    
+    return{"status": True, "save_folder": save_folder, "file_name": file_name}
+
+@app.route('/export_csv_allmicro_bf', methods=['GET', 'POST'])
+def export_csv_allmicro_bf():
+    inputs = request.get_json()
+
+    result_type_1 = inputs["r1"]    
+    result_type_2 = inputs["r2"]
+    result_type_3 = inputs["r3"]   
+    result_type_4 = inputs["r4"]       
+    microphone_id = inputs["response_allnodeid"]
+
+    print("microphone_id =")    
+    print(microphone_id)   
+
+    folder_path = current_path_bf + '\\3_SPL_BF'  # Thay bằng đường dẫn thư mục chứa file CSV
+    folder_path_Octave = current_path_bf + '\\4_SPL_BF_3rdOctave'
+    folder_path_changefreq = current_path_bf + '\\5_SPL_BF_changefreq'    
+    freq = None
+    value = []
+    file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
+  
+    
+    for file_name in file_list:
+        file_path = os.path.join(folder_path, file_name)
+        file_path_Octave = os.path.join(folder_path_Octave, file_name) 
+        file_path_changefreq = os.path.join(folder_path_changefreq, file_name)         
+        df = pd.read_csv(file_path)
+        df_Octave = pd.read_csv(file_path_Octave)
+        df_changefreq = pd.read_csv(file_path_changefreq)   
+
+        if result_type_1 == 1 :
+            result_type ="MPa"
+            freq = df_changefreq.iloc[:, 0].tolist()            
+            value_col = df_changefreq.iloc[:, int(2)].apply(safe_float)
+        if result_type_2 == 1 :
+            result_type ="dB"            
+            freq = df_changefreq.iloc[:, 0].tolist()             
+            value_col = df_changefreq.iloc[:, int(3)].apply(safe_float)        
+        if result_type_3 == 1 :
+            result_type ="dBA"              
+            freq = df_changefreq.iloc[:, 0].tolist()             
+            value_col = df_changefreq.iloc[:, int(4)].apply(safe_float) 
+        if result_type_4 == 1 :
+            result_type ="dBA_OneThirdOctaveband"              
+            freq = df_Octave.iloc[:, 0].tolist()             
+            value_col = df_Octave.iloc[:, int(1)].apply(safe_float)  
+        value.append(value_col.tolist())
+
+    micro_list = []
+
+    for f in os.listdir(folder_path):
+        full_path = os.path.join(folder_path, f)
+        if os.path.isfile(full_path):
+            name_without_ext = os.path.splitext(f)[0]
+            micro_list.append(name_without_ext)
+        
+    df = pd.DataFrame({'freq': freq})
+
+    # Thêm các cột dữ liệu cho từng micro
+    for i, micro_name in enumerate(micro_list):
+        # Kiểm tra độ dài value[i] có bằng độ dài freq không
+        if len(value[i]) != len(freq):
+            print(f"Warning: length mismatch for micro {micro_name}")
+        df[micro_name] = value[i]
+        
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+    # Xuất ra file CSV
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")  # Ví dụ: 20250730_164558
+    save_folder = current_path_bf  + "\\BlockedForce_Output"
+    file_name =  "All_Mic_" + result_type + "_" + timestamp + ".csv"    
+#    file_name = micro_list[currently_microphone_id] + "_" + result_type + "_" + timestamp + ".csv"
+    file_path = save_folder + "\\" + file_name
+    df.to_csv(file_path, index=False) 
+    
+    excel_file = current_path_bf  + "\\template.xlsm"   
+    save_as_path = save_folder + "\\All_Mic_" + result_type + "_" + timestamp + ".xlsm" 
+    copy_csv_to_xlsm_and_run_macro(file_path, excel_file,save_as_path)    
+    return{"status": True, "save_folder": save_folder, "file_name": file_name}
+
+def copy_csv_to_xlsm_and_run_macro(csv_path, excel_path, save_as_file ):
+    # Đọc dữ liệu CSV
+    df = pd.read_csv(csv_path)
+
+    # Tên sheet mới lấy từ tên file CSV (không có phần mở rộng)
+    sheet_name = os.path.splitext(os.path.basename(csv_path))[0]
+
+    # Mở workbook giữ macro
+    wb = load_workbook(excel_path, keep_vba=True)
+
+    # Nếu sheet đã tồn tại thì xóa sheet đó (openpyxl không hỗ trợ xóa sheet trong file xlsm tốt, nên ta sẽ tạo sheet mới với tên khác hoặc xử lý khác)
+    std = wb["Sheet1"]
+    wb.remove(std)
+
+    # Tạo sheet mới
+    ws = wb.create_sheet(title=sheet_name)
+
+    # Ghi dữ liệu dataframe vào sheet mới
+    for r_idx, row in enumerate(df.itertuples(index=False), 2):  # bắt đầu từ hàng 2 vì hàng 1 là header
+        for c_idx, value in enumerate(row, 1):
+            ws.cell(row=r_idx, column=c_idx, value=value)
+
+    # Ghi header
+    for c_idx, col_name in enumerate(df.columns, 1):
+        ws.cell(row=1, column=c_idx, value=col_name)
+
+    # Lưu workbook giữ macro
+    wb.save(save_as_file)
+    wb.close()
+    
+    macro_name = "CreateXYCharts"
+    # Mở Excel và chạy macro
+    excel = win32.DispatchEx("Excel.Application")
+    excel.Visible = False
+    workbook = excel.Workbooks.Open(os.path.abspath(save_as_file))
+
+    try:
+        # Gọi macro, macro_name có thể là "Module1.MacroName" hoặc "MacroName"
+        excel.Application.Run(f"'{os.path.basename(save_as_file)}'!{macro_name}")
+    except Exception as e:
+        print("Lỗi khi chạy macro:", e)
+    else:
+        print("Chạy macro thành công!")
+    workbook.Save()
+    workbook.Close()
+    excel.Quit()
+
+    
+if __name__ == "__main__":
+  Timer(1, open_browser).start()
+
+  app.run(host="127.0.0.1", port=5000)
+
