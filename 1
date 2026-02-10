@@ -1,4 +1,4 @@
-# MISA support GUI 2023/08/09
+# MISA support GUI 2023/08/03
 
 from pyjdg import *
 import JPT
@@ -9,17 +9,24 @@ import time
 import datetime
 
 # DEFINE NAME ------------------------------------------------------
-BROWSE_PYTHON    = 'python_dir'
-BROWSE_PCH       = 'pch_dir'
-BROWSE_OUT       = 'out_dir'
-RADIO_VIBRATION  = 'is_vibra'
-RADIO_ERP        = 'is_ERP'
+BROWSE_PYTHON = 'python_dir'
+BROWSE_PLT    = 'plt_dir'
+BROWSE_RESULT = 'result_dir'
+BROWSE_OUT    = 'out_dir'
+RADIO_DB      = 'is_dB'
+RADIO_DBA     = 'is_dBA'
+COMBO_DB      = 'combodb'
+COMBO_DBA     = 'combodba'
+# COMBOBOX OPTION --------------------------------------------------
+NARROWBAND = 0
+OCTAVEBAND = 1
 
 # Global parametes default setting
 m_crDir = os.path.abspath(os.path.join(os.path.dirname(JPT.GetAppPathInfo(JPT.PathType.FILE_PATH)),'..'))
 m_log_dir = os.path.join(m_crDir,'_log')
 m_libDir = os.path.join(m_crDir,"site-packages") # Python library directory
-m_log_file = os.path.join(m_log_dir,'log_read_pch.txt')
+m_template = os.path.join(os.path.join(m_libDir,'template'),'template_exportcsv.sess')
+m_log_file = os.path.join(m_log_dir,'log_export_from_plt.txt')
 
 def crTree(path):
     try:
@@ -41,13 +48,19 @@ def save_dlg(dlg,file):
         if not dlg or not log_file: return 0
         log_file.write(dlg.get_item_text(name=BROWSE_PYTHON))
         log_file.write('\n')
-        log_file.write(dlg.get_item_text(name=BROWSE_PCH))
+        log_file.write(dlg.get_item_text(name=BROWSE_PLT))
+        log_file.write('\n')
+        log_file.write(dlg.get_item_text(name=BROWSE_RESULT))
         log_file.write('\n')
         log_file.write(dlg.get_item_text(name=BROWSE_OUT))
         log_file.write('\n')
-        log_file.write(str(dlg.isbutton_checked(name=RADIO_VIBRATION)))
+        log_file.write(str(dlg.isbutton_checked(name=RADIO_DB)))
         log_file.write('\n')
-        log_file.write(str(dlg.isbutton_checked(name=RADIO_ERP)))
+        log_file.write(str(dlg.get_combobox_sel(name=COMBO_DB)))
+        log_file.write('\n')
+        log_file.write(str(dlg.isbutton_checked(name=RADIO_DBA)))
+        log_file.write('\n')
+        log_file.write(str(dlg.get_combobox_sel(name=COMBO_DBA)))
         log_file.close()
         return 1
     except: return 0
@@ -59,19 +72,22 @@ def read_log(dlg,file):
         if not log_file: return 0
         lines = log_file.readlines()
         dlg.set_item_text(name=BROWSE_PYTHON,text=lines[0].strip())
-        dlg.set_item_text(name=BROWSE_PCH,text=lines[1].strip()) 
-        dlg.set_item_text(name=BROWSE_OUT,text=lines[2].strip())     
-        if lines[3].strip() == 'True':
-            dlg.set_radiobutton_state(name=RADIO_VIBRATION,checked=True)
-        else: dlg.set_radiobutton_state(name=RADIO_VIBRATION,checked=False)
+        dlg.set_item_text(name=BROWSE_PLT,text=lines[1].strip()) 
+        dlg.set_item_text(name=BROWSE_RESULT,text=lines[2].strip())     
+        dlg.set_item_text(name=BROWSE_OUT,text=lines[3].strip())
         if lines[4].strip() == 'True':
-            dlg.set_radiobutton_state(name=RADIO_ERP,checked=True)
-        else: dlg.set_radiobutton_state(name=RADIO_ERP,checked=False)
+            dlg.set_radiobutton_state(name=RADIO_DB,checked=True)
+        else: dlg.set_radiobutton_state(name=RADIO_DB,checked=False)
+        dlg.set_combobox_sel(name=COMBO_DB,option=int(lines[5].strip()))
+        if lines[6].strip() == 'True':
+            dlg.set_radiobutton_state(name=RADIO_DBA,checked=True)
+        else: dlg.set_radiobutton_state(name=RADIO_DBA,checked=False)
+        dlg.set_combobox_sel(name=COMBO_DBA,option=int(lines[7].strip()))
         log_file.close()
         return 1
     except: return 0
 
-def create_cmd(dlg,file,py_run_file):
+def create_cmd(dlg,file,template):
     try:
         if not dlg: return 0
         run_file = open(file,"w")
@@ -81,40 +97,53 @@ def create_cmd(dlg,file,py_run_file):
         run_file.write('rem (C) TechnoStar Co. Ltd\n')
         run_file.write('rem Created by Misa: {}\n'.format(datetime.datetime.now()))
         run_file.write('rem -----------------------------------------------\n\n')
-        run_file.write('set Python_3="{}"'.format(dlg.get_item_text(name=BROWSE_PYTHON).strip()))
-        run_file.write('\n')
-        run_file.write('set pch_dir="{}"'.format(dlg.get_item_text(name=BROWSE_PCH).strip()))
-        run_file.write('\n')
-        run_file.write('set Out_dir="{}"'.format(dlg.get_item_text(name=BROWSE_OUT).strip()))
+        run_file.write('set Python_3="{}"\n'.format(dlg.get_item_text(name=BROWSE_PYTHON).strip()))
+        run_file.write('set Plt_dir="{}"\n'.format(dlg.get_item_text(name=BROWSE_PLT).strip()))
+        run_file.write('set Result_dir="{}"\n'.format(dlg.get_item_text(name=BROWSE_RESULT).strip()))
+        run_file.write('set Out_dir="{}"\n'.format(dlg.get_item_text(name=BROWSE_OUT).strip()))
+        run_file.write('set Template="{}"'.format(template))
         run_file.write('\n\n')
-        run_file.write('%Python_3% -u {} %pch_dir% %Out_dir%'.format(py_run_file))
+        run_file.write('%Python_3% -u _Export_csv_from_plt.py %Plt_dir% %Result_dir% %Out_dir% %Template%')
         run_file.write('\n\necho DONE!!!')
         run_file.write('\npause')
         run_file.close()
         return 1
     except: return 0
 
+def create_macro(dlg,template):
+    try:
+        if not dlg or not os.path.isfile(template): return 0
+        lines = ''
+        with open(template,'r') as f:
+            lines = f.readlines()    
+        if dlg.isbutton_checked(name=RADIO_DB):
+            lines[75] = """        		pltviewer_1.update_func(func=func[func_name],x='{set_1.POINT_1[point.id].field["f"]}',y='dB_pressure({set_1.POINT_1[point.id].field["fp"].lc'+'[{}]'.format(loadcase[k])+'})')\n"""
+            if dlg.get_combobox_sel(name=COMBO_DB) == OCTAVEBAND:
+                lines[77] = """        		pltviewer_1.set_prop( pltviewer_1.get_curve( curve_cnt ), type='1/3 octave' )\n"""
+            elif dlg.get_combobox_sel(name=COMBO_DB) == NARROWBAND: 
+                lines[77] = """        		#pltviewer_1.set_prop( pltviewer_1.get_curve( curve_cnt ), type='1/3 octave' )\n"""
+        elif dlg.isbutton_checked(name=RADIO_DBA):
+            lines[75] = """        		pltviewer_1.update_func(func=func[func_name],x='{set_1.POINT_1[point.id].field["f"]}',y='dBA_pressure({set_1.POINT_1[point.id].field["fp"].lc'+'[{}]'.format(loadcase[k])+'})')\n"""
+            if dlg.get_combobox_sel(name=COMBO_DBA) == OCTAVEBAND:
+                lines[77] = """        		pltviewer_1.set_prop( pltviewer_1.get_curve( curve_cnt ), type='1/3 octave' )\n"""
+            elif dlg.get_combobox_sel(name=COMBO_DBA) == NARROWBAND: 
+                lines[77] = """        		#pltviewer_1.set_prop( pltviewer_1.get_curve( curve_cnt ), type='1/3 octave' )\n"""
+        with open(template,'w') as f:
+            f.writelines(lines)
+        return 1
+    except: return 0
+
 def excute(dlg):
     try:
         if on_button_save(dlg) == 0: return 0
-        run_file = os.path.join(m_libDir,'read_pch.cmd')
-        pch_dir = dlg.get_item_text(name=BROWSE_PCH).strip()
-        py_run_file = '_read_pch_file.py'
-        if dlg.isbutton_checked(name=RADIO_ERP) == True: 
-            py_run_file = '_read_pch_file_ERP.py'
-        if not os.path.isfile(os.path.join(m_libDir,py_run_file)):
-            MsgOut('Error: no {} in library'.format(py_run_file))
-            return 0
-        if not os.path.isdir(pch_dir): 
-            MsgOut('*pch directory is incorrect')
-            return 0
-        else:
-            listFile = [f for f in os.listdir(pch_dir) if os.path.isfile(os.path.join(pch_dir,f)) and f.endswith('.pch')]
-            if len(listFile) <= 0: 
-                MsgOut('No *pch file in *pch folder')
-                return 0
+        if create_macro(dlg,m_template) == 0: return 0
+        run_file = os.path.join(m_libDir,'export_csv_from_plt.cmd')
         if crTree(dlg.get_item_text(name=BROWSE_OUT).strip()) == 0: return 0
-        if create_cmd(dlg,run_file,py_run_file) == 0: return 0
+        result_dir = dlg.get_item_text(name=BROWSE_RESULT).strip()
+        if not os.path.isdir(result_dir):
+            MsgOut('*plt directory is incorrect')
+            return 0
+        if create_cmd(dlg,run_file,m_template) == 0: return 0
         os.chdir(m_libDir)
         subprocess.Popen(run_file)
         time.sleep(1)
@@ -125,10 +154,13 @@ def initialize(dlg):
     try:
         if not dlg: return 0
         dlg.set_item_text(name=BROWSE_PYTHON,text='F:\Software&Tool\python3.5\python3.5\win64\python.exe')
-        dlg.set_item_text(name=BROWSE_PCH,text=m_crDir)
-        dlg.set_item_text(name=BROWSE_OUT,text=os.path.join(m_crDir,'From_pch_out'))
-        dlg.set_radiobutton_state(name=RADIO_VIBRATION,checked=True)
-        dlg.set_radiobutton_state(name=RADIO_ERP,checked=False)
+        dlg.set_item_text(name=BROWSE_PLT,text='C:\FFT\Actran_16.0\\bin\pltviewer.bat')
+        dlg.set_item_text(name=BROWSE_RESULT,text=os.path.join(m_crDir,'0_Result_File'))
+        dlg.set_item_text(name=BROWSE_OUT,text=os.path.join(m_crDir,'1_Out'))
+        dlg.set_radiobutton_state(name=RADIO_DB,checked=True)
+        dlg.set_combobox_sel(name=COMBO_DB,option=0)
+        dlg.set_radiobutton_state(name=RADIO_DBA,checked=False)
+        dlg.set_combobox_sel(name=COMBO_DBA,option=0)
         if os.path.isfile(m_log_file):
             if read_log(dlg,m_log_file) == 0: return 0
         JPT.ClearLog()
@@ -161,22 +193,30 @@ def on_button_save(dlg):
     except: return 0
 
 def main():
-    dlg=JDGCreator(title="[NVH] Read *pch File",include_apply=False,include_ok=False,include_cancel=False)
+    dlg=JDGCreator(title="[PLTViewer] Export csv data",include_apply=False,include_ok=False,include_cancel=False)
     dlg.add_groupbox(name="GroupBox15",text="Directory Setting",layout="Window")
     dlg.add_layout(name="Layout2",orientation=orientation.horizontal,layout="GroupBox15")
-    dlg.add_label(name="Label3",text="Python 3.5 (.exe)",width=90,text_halign="left",text_valign="top",layout="Layout2")
-    dlg.add_browser(name="python_dir",mode="file",file_filter="All Files(*.*)|*.*|||*.*|||*.*|||*.*|||*.*|||*.*|||*.*||",layout="Layout2")
+    dlg.add_label(name="Label3",text="Python 3.5 (.exe)",width=105,text_halign="left",text_valign="top",layout="Layout2")
+    dlg.add_browser(name="python_dir",mode="file",file_filter="All Files(*.*)|*.*|||*.*|||*.*|||*.*|||*.*||",layout="Layout2")
+    dlg.add_layout(name="Layout6",orientation=orientation.horizontal,layout="GroupBox15")
+    dlg.add_label(name="Label7",text="PLTViewer (.bat)",width=105,text_halign="left",text_valign="top",layout="Layout6")
+    dlg.add_browser(name="plt_dir",mode="file",file_filter="All Files(*.*)|*.*|||*.*|||*.*|||*.*|||*.*||",layout="Layout6")
     dlg.add_layout(name="Layout9",orientation=orientation.horizontal,layout="GroupBox15")
-    dlg.add_label(name="Label10",text="*pch Folder",width=90,text_halign="left",text_valign="top",layout="Layout9")
-    dlg.add_browser(name="pch_dir",mode="folder",file_filter="All Files(*.*)|*.*|||*.*|||*.*|||*.*|||*.*|||*.*|||*.*||",layout="Layout9")
+    dlg.add_label(name="Label10",text="PLT Result Folder",width=105,text_halign="left",text_valign="top",layout="Layout9")
+    dlg.add_browser(name="result_dir",mode="folder",file_filter="All Files(*.*)|*.*|||*.*|||*.*|||*.*|||*.*||",layout="Layout9")
     dlg.add_layout(name="Layout12",orientation=orientation.horizontal,layout="GroupBox15")
-    dlg.add_label(name="Label13",text="Output Folder",width=90,text_halign="left",text_valign="top",layout="Layout12")
-    dlg.add_browser(name="out_dir",mode="folder",file_filter="All Files(*.*)|*.*|||*.*|||*.*|||*.*|||*.*|||*.*|||*.*||",layout="Layout12")
-    dlg.add_groupbox(name="GroupBox17",text="Result Type",layout="Window")
+    dlg.add_label(name="Label13",text="Output Folder",width=105,text_halign="left",text_valign="top",layout="Layout12")
+    dlg.add_browser(name="out_dir",mode="folder",file_filter="All Files(*.*)|*.*|||*.*|||*.*|||*.*|||*.*||",layout="Layout12")
+    dlg.add_groupbox(name="GroupBox17",text="Result Option",layout="Window")
     dlg.add_layout(name="Layout22",orientation=orientation.vertical,layout="GroupBox17")
     dlg.add_layout(name="Layout20",orientation=orientation.horizontal,layout="Layout22")
-    dlg.add_radiobutton(name="is_vibra",text="Disp/Veloc/Accel",width=110,layout="Layout20")
-    dlg.add_radiobutton(name="is_ERP",text="ERP",width=20,layout="Layout20")
+    dlg.add_radiobutton(name="is_dB",text="dB",width=20,layout="Layout20")
+    dlg.add_layout(name="Layout33",margin=[5,0,0,0],orientation=orientation.horizontal,layout="Layout20")
+    dlg.add_combobox(name="combodb",options=["Narrow band","Octave band"],index=0,width=10,layout="Layout33")
+    dlg.add_layout(name="Layout21",orientation=orientation.horizontal,layout="Layout22")
+    dlg.add_radiobutton(name="is_dBA",text="dBA",width=20,layout="Layout21")
+    dlg.add_layout(name="Layout34",margin=[5,0,0,0],orientation=orientation.horizontal,layout="Layout21")
+    dlg.add_combobox(name="combodba",options=["Narrow band","Octave band"],index=0,layout="Layout34")
     dlg.add_layout(name="Layout28",margin=[30,0,30,0],orientation=orientation.horizontal,layout="Window")
     dlg.add_layout(name="Layout29",orientation=orientation.horizontal,layout="Layout28")
     dlg.add_button(name="save_gui",text="Save GUI",width=60,height=28,layout="Layout29")
@@ -196,6 +236,8 @@ if __name__=='__main__':
     JPT.ClearLog()
     if not os.path.isdir(m_crDir):
         print('Failed to get current directory!')
+    if not os.path.isfile(m_template):
+        print('Failed to get template directory!')
     if main() == 0:
         print('FAILED.')
 
