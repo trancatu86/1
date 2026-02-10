@@ -1,1 +1,1650 @@
 
+# This function is used for running acoustic tool by Jupiter v5.0
+# 2022/12/07 MISA
+
+# #####################################################################################
+import os
+import sys
+import ctypes
+import JPT
+import datetime
+import ftplib
+import imp
+import subprocess
+import time
+import csv
+import shutil
+import win32gui
+from pyjdg import *
+import tkinter as tk
+from tkinter import filedialog
+from tkinter import ttk
+from functools import partial
+# #####################################################################################
+
+# NO.TABLE IN GUI ---------------------------------------------------------------------
+TABLE_EXCITE    = 0
+TABLE_RECOV     = 1
+TABLE_GREEN     = 2
+TABLE_COLOR     = 3
+TABLE_TOL       = 4
+# NO.OPTION ---------------------------------------------------------------------------
+CHECK_ISDAT     = 0
+CHECK_ISUPLOAD  = 1
+CHECK_ISRECOV   = 2
+CHECK_ISGREEN   = 3
+CHECK_ISPOST    = 4
+# DEFINE NAME -------------------------------------------------------------------------
+TEXT_FTP_ADDRESS= "ftpHostName"
+TEXT_FTP_USER   = "ftpUser"
+TEXT_FTP_PASS   = "ftpPasswd"
+BROWSE_TERATERM = "TeraTerm"
+BROWSE_PLT_DIR  = "PLT_dir"
+BROWSE_PYTHON   = "Python_dir"
+TABLE_NAME      = ("table_excite", "table_recov", "table_green","table_color")
+BROWSE_OUT      = "output_dir"
+BROWSE_EXCITE   = "excite_dir"
+TEXT_START_FREQ = "start_freq"
+TEXT_END_FREQ   = "end_freq"
+TEXT_EXCITENAME = "text_exciteName"
+TEXT_UPLOAD     = "text_uploadHeader"
+BROWSE_POST     = "post_result_folder"
+TEXT_MODEL_NAME = "text_model_name"
+TEXT_MODEL_CNT  = "0"
+TEXT_X_MIN      = "xmin"
+TEXT_X_MAX      = "xmax"
+TEXT_Y_MIN      = "ymin"
+TEXT_Y_MAX      = "ymax"    
+CHECK_OP2       = "check_op2"
+CHECK_ADD_MODEL = "check_crmodel"
+CHECK_NAME_LIST = ("check_isDat","check_isUpload","check_isRecov","check_isGreen","check_isPost")
+GROUP_NAME_LIST = ("group_excite","group_uploadRecov","group_recov","group_green","group_post")
+# NO.COLUMN EXCITE TABLE --------------------------------------------------------------
+EXCITE_PROJNAME = 0
+EXCITE_HEADER   = 1
+EXCITE_DATNAME  = 2
+EXCITE_INP4     = 3
+EXCITE_FEM      = 4
+EXCITE_NSET     = 5
+EXCITE_BCFLAG   = 6
+EXCITE_BCNUMBER = 7
+EXCITE_BCFILE   = 8
+EXCITE_CSFLAG   = 9
+EXCITE_OP2OP4   = 10
+EXCITE_SPCFLAG  = 11
+EXCITE_SPCNAME  = 12
+EXCITE_ERPFLAG  = 13
+EXCITE_ERPFILE  = 14
+# NO.COLUMN RECOVERY TABLE ------------------------------------------------------------
+RECOV_FOLDER    = 0
+RECOV_FILE      = 1
+RECOV_SOLVER    = 2
+RECOV_VERSION   = 3
+RECOV_QUEUE     = 4
+RECOV_TIME      = 5
+# NO.COLUMN GREEN TABLE ---------------------------------------------------------------
+GREEN_FOLDER    = 0
+GREEN_FILE      = 1
+GREEN_METHOD    = 2
+# NO.COLUMN COLOR ---------------------------------------------------------------------
+CURVE_NAME      = 0
+CURVE_COLOR     = 1
+CURVE_TYPE      = 2
+LOADCASE        = 3
+LIST_COLOR_DLG  = ('blue','green','red','cyan','magenta','yellow','black','white')
+LIST_COLOR_CNT  = {'blue':0,'green':1,'red':2,'cyan':3,'magenta':4,'yellow':5,'black':6,'white':7,'solid':0,'dashed':1,'dotted':2,'dashdot':3}
+LIST_TYPE       = ('solid','dashed','dotted','dashdot')
+CRANKSHAFT_KEY  = ['CS','crank','Crank','Crankshaft','crankshaft','CrankShaft']
+# Global parameters default setting----------------------------------------------------
+m_settingDir = os.path.abspath(os.path.join(os.path.dirname(JPT.GetAppPathInfo(JPT.PathType.FILE_PATH)),'..')) # Current working directory
+m_libDir = os.path.join(m_settingDir,"site-packages") # Python library directory
+if not os.path.isdir(m_settingDir):
+    print('Setting directory is incorrect, please check cwd_dir for more information!')
+else:
+    os.chdir(m_settingDir)
+    if not os.path.isdir(m_libDir):
+        print('Folder "site-pakages" is not existed!')
+m_table_data = [] # table data in list
+for i in range(0,TABLE_TOL):
+    m_table_data.append([])
+# -------------------------------------------------------------------------------------
+
+def crTree(path):
+    try:
+        if not os.path.isdir(path): os.makedirs(path)
+        return 1
+    except: return 0
+
+def delDir(path):
+	try:
+		if os.path.isdir(path): shutil.rmtree(path)
+		return 1
+	except OSError as e:
+		print("Error: %s : %s" % (path,e.strerror))
+		return 0
+
+def msg_box(title, text, style):
+    return ctypes.windll.user32.MessageBoxW(0,text,title,style)
+
+def get_data_from_table(dlg,table_id):
+    try:
+        if not dlg: return 0
+        m_table_data[table_id] = []
+        for row in range(0,dlg.get_total_row(name=TABLE_NAME[table_id])):
+            data = []
+            for col in range(0,dlg.get_total_column(name=TABLE_NAME[table_id])):
+                data.append(dlg.get_cell_value(name=TABLE_NAME[table_id],cell_row_id=row,cell_column_id=col))
+            m_table_data[table_id].append(data)
+        return 1
+    except: return 0
+
+def check_duplicate_name(list,row,name):
+    try: 
+        if len(list) < row or row < 0: return 0
+        for i in range(0,row):
+            if name == list[i][EXCITE_PROJNAME]: return 1
+        return 0
+    except: return 0
+
+def check_loadcase(result_folder,lc):
+    try:
+        if not os.path.isdir(result_folder): return 0
+        loadcase = []
+        if len(os.listdir(result_folder)) <= 0:
+            print('check load case failed at {}'.format(result_folder))
+            print('delete folder')
+            shutil.rmtree(result_folder)
+            return 1
+        for file in os.listdir(result_folder):
+            if file.endswith('.plt'):
+                with open(os.path.join(result_folder,file)) as f:
+                    flag_start = False
+                    flag_end = False
+                    for line in f.readlines():
+                        if 'END LOADCASE_INDEX' in line: flag_end = True
+                        if flag_start == True and flag_end == False:
+                            try:
+                                loadcase.append(list(line.split(' '))[1].strip())
+                            except: return 0
+                        if 'BEGIN LOADCASE_INDEX' in line: flag_start = True
+                        if flag_start == True and flag_end == True: break
+                break
+        if len(loadcase) == 0: 
+            print('check load case failed at {}'.format(result_folder))
+            print('delete folder')
+            shutil.rmtree(result_folder)
+            return 1       
+        isexist = False
+        for i in loadcase:
+            try:
+                if int(lc) == int(i):
+                    isexist = True
+                    break
+            except: return 0
+        if isexist == True: return int(lc)
+        else:
+            print('Warning: load case should be in list {}'.format(loadcase))
+            return int(loadcase[0])
+    except: return 0
+
+def check_loadcase_from_edat(dlg,lc):
+    try:
+        loadcase = []
+        if not dlg: return 0
+        pc_out = dlg.get_item_text(name=BROWSE_OUT)
+        try:
+            ftp = ftplib.FTP(dlg.get_item_text(TEXT_FTP_ADDRESS))
+            ftp.login(dlg.get_item_text(TEXT_FTP_USER),dlg.get_item_text(TEXT_FTP_PASS))
+        except:
+            print('Error: Login FFTP failed. Cannot check loadcase data.')
+            return 'stop'
+        if dlg.get_total_row(name=TABLE_NAME[TABLE_GREEN]) == 0:
+            print('Warning: no submit actran data was found. Cannot check loadcase data')
+            return 0
+        for row in range(0,dlg.get_total_row(name=TABLE_NAME[TABLE_GREEN])):
+            server = dlg.get_cell_value(name=TABLE_NAME[TABLE_GREEN],cell_row_id=row,cell_column_id=GREEN_FOLDER)
+            try:
+                ftp.cwd(server)
+            except: continue
+            for file in ftp.nlst():
+                if file.endswith('.edat') and file == dlg.get_cell_value(name=TABLE_NAME[TABLE_GREEN],cell_row_id=row,cell_column_id=GREEN_FILE):
+                    tmp_dir = os.path.join(m_settingDir,"tmp")
+                    if crTree(tmp_dir) == 0: return 0
+                    os.chdir(tmp_dir)
+                    try:
+                        msg = ftp.retrbinary('RETR ' + file, open(file, 'wb').write)
+                    except: continue
+                    with open(os.path.join(tmp_dir,file)) as f:
+                        for line in f.readlines():
+                            if 'BEGIN LOADCASE' in line:
+                                loadcase.append(list(line.split(' '))[-1].strip())
+                            if 'END MULTIPLE_LOAD' in line: break
+                    os.remove(os.path.join(tmp_dir,file))
+                    os.chdir(m_settingDir)
+                    if len(loadcase) > 0: break
+            if len(loadcase) > 0: break
+        if len(loadcase) == 0:
+            ftp.quit()
+            print('Warning: no loadcase was found in sbmit folder')
+            return 0
+        isexist = False
+        for i in loadcase:
+            try:
+                if int(lc) == int(i):
+                    isexist = True
+                    break
+            except:
+                ftp.quit()
+                return 0
+        if isexist == True:
+            ftp.quit()
+            return int(lc)
+        else:
+            print('Warning: load case should be in list {}'.format(loadcase))
+            ftp.quit()
+            return int(loadcase[0])
+    except: return 0
+
+def get_data_from_color_dlg(event):
+    try:
+        cnt = int(event.widget.cnt)
+        name = event.widget.name
+        if name == 'color':
+            m_table_data[TABLE_COLOR][cnt][CURVE_COLOR] = event.widget.get()
+        elif name == 'type':
+            m_table_data[TABLE_COLOR][cnt][CURVE_TYPE] = event.widget.get()
+        elif name == 'loadcase':
+            lc = event.widget.get()
+            entry_text = event.widget.text
+            if lc == 0 or not lc.isdigit():
+                print('Warning: loadcase data type should be integer')
+                entry_text.set(m_table_data[TABLE_COLOR][cnt][LOADCASE])
+            else:
+                if os.path.isdir(event.widget.path):
+                    lc = check_loadcase(event.widget.path,lc)
+                else: lc = check_loadcase_from_edat(event.widget.dlg,lc)
+                if lc == 0: return 0
+                entry_text.set(str(lc))
+                m_table_data[TABLE_COLOR][cnt][LOADCASE] = str(lc)
+        return 1
+    except: return 0
+
+def create_color_dlg(list_data,result_folder,dlg):
+    try:
+        if len(list_data) == 0 or not dlg: return 0
+        root = tk.Tk()
+        root.geometry('450x250')
+        root.title('Set curve color')
+        color = []
+        type = []
+        lc = ([],[])
+        # Create column header
+        ttk.Label(root,text='Model name',foreground='black').grid(column=0,row=1,padx=20,pady=5,sticky='w')
+        ttk.Label(root,text='Curve color',foreground='black').grid(column=1,row=1,padx=5,pady=5,sticky='w')
+        ttk.Label(root,text='Curve style',foreground='black').grid(column=2,row=1,padx=5,pady=5,sticky='w')
+        ttk.Label(root,text='Loadcase ID',foreground='black').grid(column=3,row=1,padx=5,pady=5,sticky='w')
+        for i in range(1,len(list_data)+1):
+            folder = os.path.join(result_folder,list_data[i-1][CURVE_NAME])
+            ttk.Label(root,text=list_data[i-1][CURVE_NAME],foreground='black').grid(column=0,row=i+1,padx=20,pady=5,sticky='w')
+            color.append(ttk.Combobox(root,width=5))
+            color[i-1]['value'] = LIST_COLOR_DLG
+            color[i-1].grid(column=1,row=i+1,padx=5)
+            color[i-1].current(LIST_COLOR_CNT[list_data[i-1][CURVE_COLOR]])
+            color[i-1].name = 'color'
+            color[i-1].cnt = i-1
+            color[i-1].bind("<<ComboboxSelected>>",get_data_from_color_dlg)
+            type.append(ttk.Combobox(root,width=5))
+            type[i-1]['value'] = LIST_TYPE
+            type[i-1].grid(column=2,row=i+1,padx=5)
+            type[i-1].current(LIST_COLOR_CNT[list_data[i-1][CURVE_TYPE]])
+            type[i-1].name = 'type'
+            type[i-1].cnt = i-1
+            type[i-1].bind("<<ComboboxSelected>>",get_data_from_color_dlg)
+            lc[1].append(tk.StringVar())
+            lc[0].append(ttk.Entry(root,text=lc[1][i-1],foreground='black',width=5))
+            lc[1][i-1].set(list_data[i-1][LOADCASE])
+            lc[0][i-1].grid(column=3,row=i+1,padx=5)
+            lc[0][i-1].name = 'loadcase'
+            lc[0][i-1].path = folder
+            lc[0][i-1].dlg = dlg
+            lc[0][i-1].cnt = i-1
+            lc[0][i-1].text = lc[1][i-1]
+            lc[0][i-1].bind("<KeyRelease>",get_data_from_color_dlg)
+        root.mainloop()
+        return 1
+    except: return 0
+
+def get_data_from_csv(csv_file):
+    try: # get data from csv
+        data = []
+        if not os.path.isfile(csv_file): return 0
+        with open(csv_file,'rt') as csv:
+            cnt = 0
+            for line in csv:
+                cnt += 1
+                if cnt > 1:
+                    row_data = list(line.split(','))
+                    for i in range(0,len(row_data)):
+                        row_data[i] = row_data[i].strip()
+                    data.append(row_data)
+        if len(data) == 0: JPT.MsgOut('Warning: cannot read data from csv')
+        return data
+    except: return 0
+
+def on_table_menu(dlg, name, menu):
+    try:
+        if not dlg: return 0
+        if len(m_table_data) != TABLE_TOL: return 0
+        table_id = (lambda x: 0 if x==TABLE_NAME[TABLE_EXCITE] else (1 if x==TABLE_NAME[TABLE_RECOV] else (2 if x==TABLE_NAME[TABLE_GREEN] else 3)))(name)
+        if menu == "Read from file":
+            # Browse file on window
+            root = tk.Tk()
+            root.withdraw()
+            file_path = filedialog.askopenfilename()
+            data = get_data_from_csv(file_path)
+            if data == 0 or len(data) == 0: return 0
+            dlg.clear_table_all(name)
+            root.destroy()
+            # Write to Dlg
+            for i in range(0,len(data)):
+                if i >= dlg.get_total_row(name):
+                    dlg.insert_table_rows(name,row_num=int(1),position=int(i))
+                if len(data[i]) < dlg.get_total_column(name): 
+                    JPT.MsgOut('Error: Get table data from csv failed')
+                    return 0
+                for column in range(0,len(data[i])):
+                    dlg.set_cell_value(name,cell_row_id=i,cell_column_id=column,value=str(data[i][column]))
+            get_data_from_table(dlg,table_id)
+        elif menu == "Clear all":
+            while True:
+                try:
+                    row = dlg.get_total_row(name)-1
+                    if row < 0: break
+                    dlg.delete_table_row(name,position=row)
+                    if row == 0: break
+                except: break
+        return 1
+    except: return 0
+
+def on_update_table_color(dlg,list_data):
+    try:
+        if not dlg: return 0
+        len_data = len(list_data)
+        if on_table_menu(dlg,name=TABLE_NAME[TABLE_COLOR],menu='Clear all') == 0: return 0
+        if len(list_data) > 0:
+            for row in range(0,len_data):
+                dlg.insert_table_rows(name=TABLE_NAME[TABLE_COLOR],row_num=int(1),position=int(row))
+                for col in range(0,len(list_data[row])):
+                    dlg.set_cell_value(name=TABLE_NAME[TABLE_COLOR],cell_row_id=row,cell_column_id=col,value=list_data[row][col])    
+        return 1
+    except: return 0
+
+def check_correct_color(color):
+    try:
+        if color == '': 
+            color = 'blue'
+            return 1
+        for i in LIST_COLOR_DLG:
+            if color == i: return 1
+        color = 'blue'
+        return 1
+    except: return 0
+
+def check_correct_type(type):
+    try:
+        if type == '': 
+            type = 'solid'
+            return 1
+        for i in LIST_TYPE:
+            if type == i: return 1
+        type = 'solid'
+        return 1
+    except: return 0
+
+def check_compare_model_name(result_folder,dlg):
+    try:
+        if not os.path.isdir(result_folder): return 0
+        try:
+            subfolder = [f.name for f in os.scandir(result_folder) if f.is_dir()]
+        except: return 0
+        if len(subfolder) > 0:
+            if len(subfolder) == 1 and dlg.isbutton_checked(name=CHECK_ADD_MODEL) == False:
+                return subfolder
+            for i in range(0,len(subfolder)):
+                a = list(subfolder[i].split('_'))[0]
+                b = list(subfolder[i].split('-'))[0]
+                if not a.isdigit() and not b.isdigit():
+                    try:
+                        os.rename(os.path.join(result_folder,subfolder[i]),os.path.join(result_folder,'{}_{}'.format(i+1,subfolder[i])))
+                        subfolder[i] = '{}_{}'.format(i+1,subfolder[i])
+                    except:
+                        JPT.MsgOut('"{}" is being used! Folder cannot be renamed!'.format(subfolder[i]))
+        else: return 0
+        return subfolder
+    except: return 0
+
+def initial_table_color(dlg,result_folder):
+    try:
+        if not dlg: return 0
+        output = [] 
+        subfolder = check_compare_model_name(result_folder,dlg)
+        data = m_table_data[TABLE_COLOR]
+        get_data_from_table(dlg,TABLE_COLOR)
+        if len(data) > len(m_table_data[TABLE_COLOR]): m_table_data[TABLE_COLOR] = data
+        model_name = dlg.get_item_text(name=TEXT_MODEL_NAME)
+        model_cnt = 0
+        if model_name != '' and subfolder != 0:
+            model_name = '{}_{}'.format(len(subfolder)+1,model_name)
+            global TEXT_MODEL_CNT
+            TEXT_MODEL_CNT = str(len(subfolder)+1)
+        if subfolder != 0:
+            if len(subfolder) != 0:
+                for i in range(0,len(subfolder)):
+                    if len(m_table_data[TABLE_COLOR]) == 0 or i>=len(m_table_data[TABLE_COLOR]):
+                        default = []
+                        default.append(subfolder[i])
+                        default.append('blue')
+                        default.append('solid')
+                        default.append('1')
+                        m_table_data[TABLE_COLOR].append(default)
+                    else: 
+                        m_table_data[TABLE_COLOR][i][CURVE_NAME] = subfolder[i]
+                        if check_correct_color(m_table_data[TABLE_COLOR][i][CURVE_COLOR]) == 0: return 0
+                        if check_correct_type(m_table_data[TABLE_COLOR][i][CURVE_TYPE]) == 0: return 0
+                        if not m_table_data[TABLE_COLOR][i][LOADCASE].isdigit():
+                            JPT.MessageBoxPSJ('Error: loadcase data type should be integer',JPT.MsgBoxType.MB_INFORMATION_OK)
+                            return 'stop'
+                    lc = check_loadcase(os.path.join(result_folder,subfolder[i]),m_table_data[TABLE_COLOR][i][LOADCASE])
+                    if lc == 0:
+                        print('check load case failed')
+                        return 0
+                    else: m_table_data[TABLE_COLOR][i][LOADCASE] = str(lc)
+                    if dlg.isbutton_checked(name=CHECK_ADD_MODEL) == True:
+                        if model_name == subfolder[i]:
+                            JPT.MessageBoxPSJ('Error: The name of new model has already existed!',JPT.MsgBoxType.MB_WARNING_OK)
+                            return 'stop'
+                if len(m_table_data[TABLE_COLOR]) < len(subfolder): return 0
+            if model_name != '':
+                if len(m_table_data[TABLE_COLOR]) > len(subfolder):
+                    m_table_data[TABLE_COLOR][len(subfolder)][CURVE_NAME] = model_name
+                    if check_correct_color(m_table_data[TABLE_COLOR][i][CURVE_COLOR]) == 0: return 0
+                    if check_correct_type(m_table_data[TABLE_COLOR][i][CURVE_TYPE]) == 0: return 0
+                else: 
+                    default = []
+                    default.append(model_name)
+                    default.append('blue')
+                    default.append('solid')
+                    default.append('1')
+                    m_table_data[TABLE_COLOR].append(default)
+            model_cnt = len(subfolder)
+        if dlg.isbutton_checked(name=CHECK_ADD_MODEL) == True: 
+            model_cnt += 1
+            if model_cnt == 1: m_table_data[TABLE_COLOR][0][CURVE_NAME] = model_name 
+        for row in range(0,model_cnt):
+            output.append(m_table_data[TABLE_COLOR][row])
+        if len(output) == 0: 
+            if on_table_menu(dlg,name=TABLE_NAME[TABLE_COLOR],menu='Clear all') == 0: return 0
+            return output
+        return output
+    except: return 0
+
+def check_submit_data(dlg,list,table_id,row):
+    try:
+        if len(list) != dlg.get_total_column(name=TABLE_NAME[table_id]): return -1
+        blank_cnt = 0
+        for col_data in list:
+            if not col_data or col_data == '0': blank_cnt += 1
+        if blank_cnt == len(list): return 0
+        if table_id == TABLE_EXCITE:
+            if not list[EXCITE_HEADER] or not list[EXCITE_FEM] or not list[EXCITE_NSET] or not list[EXCITE_DATNAME] or not list[EXCITE_INP4]:
+                JPT.MsgOut('Warning: Table data for #ProjectName"{}" is incorrect'.format(list[EXCITE_PROJNAME]))
+                returnValue = JPT.MessageBoxPSJ('Warning: #ProjectName"{}" at column 2~6 is incorrect.\nThis row will be deleted automatically.\nDo you want to continue?'.format(list[EXCITE_PROJNAME]),JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                if returnValue == 'NO': return 'stop'
+                else: return 0
+            if not list[EXCITE_DATNAME].endswith('.dat'):
+                JPT.MsgOut('Warning: Excite at column:#FEA_*dat_FileName should be end with ".dat"')
+                returnValue = JPT.MessageBoxPSJ('Warning: Excite at column:#FEA_*dat_FileName should be end with ".dat".\nThis row will be deleted automatically.\nDo you want to continue?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                if returnValue == 'NO': return 'stop'
+                else: return 0
+            if not list[EXCITE_INP4].endswith('.INP4'):
+                JPT.MsgOut('Warning: Excite at column:#FEA_INP4_FileName should be end with ".INP4"')
+                returnValue = JPT.MessageBoxPSJ('Warning: Excite at column:#FEA_INP4_FileName should be end with ".INP4".\nThis row will be deleted automatically.\nDo you want to continue?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                if returnValue == 'NO': return 'stop'
+                else: return 0
+            if not list[EXCITE_FEM].endswith('.bdf'):
+                JPT.MsgOut('Warning: Excite at column:#FEMModel_Name should be end with ".bdf"')
+                returnValue = JPT.MessageBoxPSJ('Warning: Excite at column:#FEMModel_Name should be end with ".bdf".\nThis row will be deleted automatically.\nDo you want to continue?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                if returnValue == 'NO': return 'stop'
+                else: return 0
+            if not list[EXCITE_NSET].endswith('.bdf'):
+                JPT.MsgOut('Warning: Excite at column:#NodeSet_FileName should be end with ".bdf"')
+                returnValue = JPT.MessageBoxPSJ('Warning: Excite at column:#NodeSet_FileName should be end with ".bdf".\nThis row will be deleted automatically.\nDo you want to continue?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                if returnValue == 'NO': return 'stop'
+                else: return 0
+            if list[EXCITE_CSFLAG] == 'on' or list[EXCITE_CSFLAG] == 'On' or list[EXCITE_CSFLAG] == 'ON' or list[EXCITE_CSFLAG] == 'oN': m_table_data[table_id][row][EXCITE_CSFLAG] = 'on'
+            else:
+                m_table_data[table_id][row][EXCITE_CSFLAG] = ''
+                if not list[EXCITE_OP2OP4]:
+                    JPT.MsgOut('Warning: Cannot find *op2/*op4 of #ProjectName"{}"'.format(list[EXCITE_PROJNAME]))
+                    returnValue = JPT.MessageBoxPSJ('Warning: Cannot find *op2/*op4 of #ProjectName"{}".\nThis row will be deleted automatically.\nDo you want to continue?'.format(list[EXCITE_PROJNAME]),JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                    if returnValue == 'NO': return 'stop'
+                    else: return 0
+            dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=EXCITE_CSFLAG,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_CSFLAG]) 
+            if list[EXCITE_BCFLAG] == 'on' or list[EXCITE_BCFLAG] == 'On' or list[EXCITE_BCFLAG] == 'ON' or list[EXCITE_BCFLAG] == 'oN':
+                m_table_data[table_id][row][EXCITE_BCFLAG] = 'on'
+                if not list[EXCITE_BCFILE]:
+                    JPT.MsgOut('Warning: Cannot find BCTable of #ProjectName"{}"'.format(list[EXCITE_PROJNAME]))
+                    returnValue = JPT.MessageBoxPSJ('Warning: Cannot find BCTable of #ProjectName"{}".\nThis row will be deleted automatically.\nDo you want to continue?'.format(list[EXCITE_PROJNAME]),JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                    if returnValue == 'NO': return 'stop'
+                    else: return 0
+                if not list[EXCITE_BCNUMBER] or list[EXCITE_BCNUMBER] == '0': m_table_data[EXCITE_BCNUMBER] = '1'
+            else: 
+                m_table_data[table_id][row][EXCITE_BCFLAG] = ''
+                m_table_data[table_id][row][EXCITE_BCFILE] = ''
+                m_table_data[table_id][row][EXCITE_BCNUMBER] = ''
+                dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=EXCITE_BCFILE,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_BCFILE])
+            dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=EXCITE_BCFLAG,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_BCFLAG]) 
+            dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=EXCITE_BCNUMBER,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_BCNUMBER])
+            if list[EXCITE_SPCFLAG] == 'on' or list[EXCITE_SPCFLAG] == 'On' or list[EXCITE_SPCFLAG] == 'ON' or list[EXCITE_SPCFLAG] == 'oN': 
+                m_table_data[table_id][row][EXCITE_SPCFLAG] = 'on'
+                if not list[EXCITE_SPCNAME] or list[EXCITE_SPCNAME] == '0': m_table_data[EXCITE_SPCNAME] = '1'
+            else: 
+                m_table_data[table_id][row][EXCITE_SPCFLAG] = ''
+                m_table_data[table_id][row][EXCITE_SPCNAME] = ''
+            dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=EXCITE_SPCFLAG,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_SPCFLAG]) 
+            dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=EXCITE_SPCNAME,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_SPCNAME])
+            if list[EXCITE_ERPFLAG] == 'on' or list[EXCITE_ERPFLAG] == 'On' or list[EXCITE_ERPFLAG] == 'ON' or list[EXCITE_ERPFLAG] == 'oN':
+                m_table_data[table_id][row][EXCITE_ERPFLAG] = 'on'
+                if not list[EXCITE_ERPFILE]:
+                    JPT.MsgOut('Warning: Cannot find ERP_Setting_FileName of #ProjectName"{}"'.format(list[EXCITE_PROJNAME]))
+                    returnValue = JPT.MessageBoxPSJ('Warning: Cannot find ERP_Setting_FileName of #ProjectName"{}".\nThis row will be deleted automatically.\nDo you want to continue?'.format(list[EXCITE_PROJNAME]),JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                    if returnValue == 'NO': return 'stop'
+                    else: return 0
+            else: 
+                m_table_data[table_id][row][EXCITE_ERPFLAG] = ''
+                m_table_data[table_id][row][EXCITE_ERPFILE] = ''
+            dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=EXCITE_ERPFLAG,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_ERPFLAG]) 
+            dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=EXCITE_ERPFILE,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_ERPFILE])
+        elif table_id == TABLE_RECOV:
+            if not list[RECOV_FOLDER] or not list[RECOV_FILE]:
+                JPT.MsgOut('Warning: Input for recovery is incorrect at row {}'.format(row+1))
+                return 0
+            if not list[RECOV_SOLVER]: 
+                m_table_data[table_id][row][RECOV_SOLVER] = 'nastc'
+                dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=RECOV_SOLVER,cell_row_id=row,value=m_table_data[table_id][row][RECOV_SOLVER])
+            if not list[RECOV_VERSION] or list[RECOV_VERSION] == '0': 
+                m_table_data[table_id][row][RECOV_VERSION] = '1'
+                dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=RECOV_VERSION,cell_row_id=row,value=m_table_data[table_id][row][RECOV_VERSION])
+            if not list[RECOV_QUEUE] or list[RECOV_QUEUE] == '0': 
+                m_table_data[table_id][row][RECOV_QUEUE] = '2'
+                dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=RECOV_QUEUE,cell_row_id=row,value=m_table_data[table_id][row][RECOV_QUEUE])
+        elif table_id == TABLE_GREEN:
+            if not list[GREEN_FILE] or not list[GREEN_FOLDER]:
+                JPT.MsgOut('Warning: Input for green analysis is incorrect at row {}'.format(row+1))
+                return 0
+            if not list[GREEN_METHOD] or list[GREEN_METHOD] == '0':
+                m_table_data[table_id][row][GREEN_METHOD] = '3'
+                dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=GREEN_METHOD,cell_row_id=row,value=m_table_data[table_id][row][GREEN_METHOD])        
+        return 1
+    except: return -1
+    
+def check_table_data(dlg,table_id):
+    try:
+        if not dlg or get_data_from_table(dlg,table_id) == 0: return 0
+        if len(m_table_data) != TABLE_TOL: return 0
+        dict_duplicate_name = {} # {name:[row]}
+        while True:
+            flag = 0
+            for row in range(0,len(m_table_data[table_id])):
+                returnCode = check_submit_data(dlg,m_table_data[table_id][row],table_id,row)
+                if returnCode == 0:
+                    flag = 1
+                    JPT.MsgOut('{} at row {} will be deleted automatically'.format(TABLE_NAME[table_id],row+1))
+                    m_table_data[table_id].pop(row)
+                    dlg.delete_table_row(name=TABLE_NAME[table_id],position=row)
+                elif returnCode == 'stop': return 'stop'
+                elif returnCode == -1: return 0
+                if flag == 1: break
+            if flag == 0: break
+        if table_id == TABLE_EXCITE and len(m_table_data[table_id]) > 0:
+            for row in range(0,len(m_table_data[table_id])):
+                if not m_table_data[table_id][row][EXCITE_PROJNAME]:
+                    JPT.MsgOut("Warning: Name of project was not defined. Saving file may not be completed")
+                    m_table_data[table_id][row][EXCITE_PROJNAME] = '#NoName'
+                    dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=0,cell_row_id=row,value=m_table_data[table_id][row][EXCITE_PROJNAME]) 
+                if row > 0:
+                    for k in range(0,row):
+                        key_name = m_table_data[table_id][k][EXCITE_PROJNAME]
+                        if m_table_data[table_id][row][EXCITE_PROJNAME] == key_name:
+                            if not (key_name in dict_duplicate_name.keys()):
+                                dict_duplicate_name[key_name] = []
+                            dict_duplicate_name[key_name].append(row)
+                    for name in dict_duplicate_name.keys():
+                        cnt = 0
+                        for change in dict_duplicate_name[name]:
+                            cnt += 1
+                            new_name = str(name) + '_' + str(cnt)
+                            while True:
+                                if check_duplicate_name(m_table_data[table_id],change,new_name) == 1: 
+                                    cnt+=1
+                                    new_name = str(name) + '_' + str(cnt)  
+                                else: 
+                                    m_table_data[table_id][change][EXCITE_PROJNAME] = new_name
+                                    break
+                            dlg.set_cell_value(name=TABLE_NAME[table_id],cell_column_id=0,cell_row_id=change,value=m_table_data[table_id][change][EXCITE_PROJNAME])
+        if len(m_table_data[table_id]) == 0: return -1
+        return 1
+    except: return 0
+
+def on_checkbox_post(dlg):
+    try:
+        if dlg.isbutton_checked(name=CHECK_ADD_MODEL) == False:
+            dlg.disable_item(name=TEXT_MODEL_NAME)
+            if dlg.isbutton_checked(name=CHECK_NAME_LIST[CHECK_ISGREEN]) == False:
+                dlg.disable_item(GROUP_NAME_LIST[CHECK_ISGREEN])
+        elif dlg.isbutton_checked(name=CHECK_ADD_MODEL) == True: 
+            dlg.enable_item(name=TEXT_MODEL_NAME)
+            dlg.enable_item(GROUP_NAME_LIST[CHECK_ISGREEN])
+            if dlg.isbutton_checked(name=CHECK_NAME_LIST[CHECK_ISGREEN]) == False:
+                dlg.disable_item(name=CHECK_OP2)
+        list_data = initial_table_color(dlg,dlg.get_item_text(name=BROWSE_POST))
+        if list_data == 0 or len(list_data) == 0: return 0
+        if on_update_table_color(dlg,list_data) == 0: return 0
+        return 1
+    except: return 0
+
+def on_checkbox_op2(dlg):
+    try:
+        if dlg.isbutton_checked(CHECK_NAME_LIST[CHECK_ISRECOV]) == False:
+            if dlg.isbutton_checked(name=CHECK_OP2) == True:
+                dlg.enable_item(GROUP_NAME_LIST[CHECK_ISRECOV])
+            else: dlg.disable_item(GROUP_NAME_LIST[CHECK_ISRECOV])
+        return 1
+    except: return 0
+
+def on_checkbox(dlg):
+    try:
+        if not dlg or len(CHECK_NAME_LIST)!=len(GROUP_NAME_LIST): return 0
+        for i in range(0,len(CHECK_NAME_LIST)):
+            if dlg.isbutton_checked(name=CHECK_NAME_LIST[i]) == True:
+                dlg.enable_item(GROUP_NAME_LIST[i])
+            else:
+                dlg.disable_item(GROUP_NAME_LIST[i])
+        if dlg.isbutton_checked(name=CHECK_NAME_LIST[CHECK_ISPOST]) == True: 
+            on_checkbox_post(dlg)
+        if dlg.isbutton_checked(name=CHECK_NAME_LIST[CHECK_ISGREEN]) == True:
+            dlg.enable_item(name=CHECK_OP2)
+            if dlg.isbutton_checked(name=CHECK_NAME_LIST[CHECK_ISRECOV]) == True:
+                dlg.set_checkbox_state(name=CHECK_OP2,checked=True)
+            on_checkbox_op2(dlg)
+        return 1
+    except: return 0
+
+def on_check_excite_data(dlg):
+    try:
+        returnCode = check_table_data(dlg,TABLE_EXCITE)
+        excite_dir = dlg.get_item_text(name=BROWSE_EXCITE)
+        excite_ename_module = dlg.get_item_text(name=TEXT_EXCITENAME)
+        if returnCode == 0: 
+            JPT.MessageBoxPSJ('Error: Excite table data checking failed',JPT.MsgBoxType.MB_INFORMATION_OK)
+            JPT.MsgOut('Error: Excite table data checking failed')
+            return 'stop'
+        elif returnCode == -1: 
+            JPT.MessageBoxPSJ("Error: No excite table data!",JPT.MsgBoxType.MB_INFORMATION_OK)
+            JPT.MsgOut('Error: No excite table data')
+            return 'stop'
+        elif returnCode == 'stop': return 'stop'
+        try:
+            subfolder = [f.name for f in os.scandir(excite_dir) if f.is_dir()]
+        except:  
+            JPT.MessageBoxPSJ('Error: Excite directory is incorrect!',JPT.MsgBoxType.MB_WARNING_OK)
+            JPT.MsgOut('Error: Excite directory is incorrect')
+            return 'stop'
+        if len(subfolder) == 0:
+            JPT.MessageBoxPSJ('Error: Excite directory is empty!',JPT.MsgBoxType.MB_WARNING_OK)
+            JPT.MsgOut('Error: Excite directory is empty')
+            return 'stop' 
+        else:
+            if not excite_ename_module:
+                JPT.MessageBoxPSJ('Error: Excite module name is empty!',JPT.MsgBoxType.MB_WARNING_OK)
+                JPT.MsgOut('Error: Excite module name is empty')
+                return 'stop'
+            else:
+                flag_found = 0
+                for child in subfolder:
+                    if child.find(excite_ename_module) != -1 and child.find("rpm") != -1:
+                        flag_found = 1
+                        break
+                if flag_found == 0:
+                    JPT.MessageBoxPSJ('Error: Cannot found "{}" in "{}"'.format(excite_ename_module,excite_dir),JPT.MsgBoxType.MB_WARNING_OK)
+                    JPT.MsgOut('Error: Cannot found "{}" in "{}"'.format(excite_ename_module,excite_dir))
+                    return 'stop'
+        JPT.MessageBoxPSJ('No excite error was found!',JPT.MsgBoxType.MB_WARNING_OK)
+        JPT.MsgOut('No excite error was found')
+        return 1
+    except: return 0
+
+def check_data_from_dlg(dlg):
+    try:
+        if not dlg: return 0
+        python_dir = dlg.get_item_text(name=BROWSE_PYTHON)
+        if not os.path.isfile(python_dir):
+            JPT.MsgOut('Error: Cannot find python directory')
+            JPT.MessageBoxPSJ('Error: Cannot find python directory!',JPT.MsgBoxType.MB_WARNING_OK)
+            return 'stop'
+        ftpHostName = dlg.get_item_text(name=TEXT_FTP_ADDRESS)
+        ftpUser = dlg.get_item_text(name=TEXT_FTP_USER)
+        ftpPass = dlg.get_item_text(name=TEXT_FTP_PASS)
+        teraterm = dlg.get_item_text(name=BROWSE_TERATERM)
+        pltviewer = dlg.get_item_text(name=BROWSE_PLT_DIR)
+        output_dir = dlg.get_item_text(name=BROWSE_OUT)
+        excite_dir = dlg.get_item_text(name=BROWSE_EXCITE)
+        excite_ename_module = dlg.get_item_text(name =TEXT_EXCITENAME)
+        excite_upload_dir = dlg.get_item_text(name=TEXT_UPLOAD)
+        result_folder =  dlg.get_item_text(name=BROWSE_POST)
+        xmin = dlg.get_item_text(name=TEXT_X_MIN)
+        xmax = dlg.get_item_text(name=TEXT_X_MAX)
+        ymin = dlg.get_item_text(name=TEXT_Y_MIN)
+        ymax = dlg.get_item_text(name=TEXT_Y_MAX)
+        start_freq = dlg.get_item_text(name=TEXT_START_FREQ)
+        end_freq = dlg.get_item_text(name=TEXT_END_FREQ)
+        if len(CHECK_NAME_LIST) != len(GROUP_NAME_LIST): return 0
+        for i in range(0,len(CHECK_NAME_LIST)):
+            if dlg.isbutton_checked(name=CHECK_NAME_LIST[i]) == True:
+                if i == 0: 
+                    returnCode = check_table_data(dlg,TABLE_EXCITE)
+                    if returnCode == 0: 
+                        JPT.MsgOut('Error: Excite table data checking failed')
+                        return 0
+                    elif returnCode == -1: 
+                        JPT.MsgOut("Warning: Cannot create header file, please check input of excite setting!")
+                        dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=False)
+                        dlg.disable_item(GROUP_NAME_LIST[i])
+                        return 'stop'
+                    elif returnCode == 'stop': return 'stop'
+                    try:
+                        subfolder = [f.name for f in os.scandir(excite_dir) if f.is_dir()]
+                    except:  
+                        JPT.MessageBoxPSJ('Error: Excite directory is incorrect!',JPT.MsgBoxType.MB_WARNING_OK)
+                        return 'stop'
+                    if len(subfolder) == 0:
+                        JPT.MessageBoxPSJ('Error: Excite directory is empty!',JPT.MsgBoxType.MB_WARNING_OK)
+                        return 'stop' 
+                    else:
+                        if not excite_ename_module:
+                            JPT.MessageBoxPSJ('Error: Excite module name is empty!',JPT.MsgBoxType.MB_WARNING_OK)
+                            return 'stop'
+                        else:
+                            flag_found = 0
+                            for child in subfolder:
+                                if child.find(excite_ename_module) != -1 and child.find("rpm") != -1:
+                                    flag_found = 1
+                                    break
+                            if flag_found == 0:
+                                JPT.MessageBoxPSJ('Error: Cannot found "{}" in "{}"'.format(excite_ename_module,excite_dir),JPT.MsgBoxType.MB_WARNING_OK)
+                                return 'stop'
+                    if len(start_freq.split('.')) == 1: 
+                        start_freq = start_freq + '.0'
+                        dlg.set_item_text(name=TEXT_START_FREQ,text=start_freq)
+                    if len(end_freq.split('.')) == 1: 
+                        end_freq = end_freq + '.0'
+                        dlg.set_item_text(name=TEXT_END_FREQ,text=end_freq)
+                    try:
+                        start_freq = float(start_freq)
+                        end_freq = float(end_freq)
+                    except:
+                        code = JPT.MessageBoxPSJ('Warning: Frequency Range is incorrect!\n\nDefault:\nstart.freq=0.0 , end.freq=4500.0\n\nDo you want to use default setting?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                        if code != 'NO': 
+                            dlg.set_item_text(name=TEXT_START_FREQ,text='0.0')
+                            dlg.set_item_text(name=TEXT_END_FREQ,text='4500.0')
+                        return 'stop'
+                    if start_freq > end_freq:
+                        code = JPT.MessageBoxPSJ('Warning: Frequency Range is incorrect!\n\nDefault:\nstart.freq=0.0 , end.freq=4500.0\n\nDo you want to use default setting?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                        if code != 'NO': 
+                            dlg.set_item_text(name=TEXT_START_FREQ,text='0.0')
+                            dlg.set_item_text(name=TEXT_END_FREQ,text='4500.0')
+                        return 'stop'
+                elif i == 1: 
+                    code = ''
+                    if not excite_upload_dir:
+                        code = JPT.MessageBoxPSJ('Upload directory is empty!\n\nTurn off "Step 2" option?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                    elif excite_upload_dir.find('/gpfs/home00/{}'.format(ftpUser)) == -1:
+                        code = JPT.MessageBoxPSJ('Cannot modify "{}" by ID"{}"!'.format(excite_upload_dir,ftpUser)+'\n\nOption "Step 2" will be turned off?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                    if code == 'YES':
+                        JPT.MsgOut("Warning: upload directory is incorrect, step 2 will be turned off automatically")
+                        dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=False)
+                        dlg.disable_item(GROUP_NAME_LIST[i])
+                        return 'stop'
+                    elif code == 'NO': return 'stop'
+                elif i == 2: 
+                    returnCode = check_table_data(dlg,TABLE_RECOV)
+                    if returnCode == 0: 
+                        JPT.MsgOut('Error: Recovery table data checking failed')
+                        return 0
+                    elif returnCode == -1: 
+                        dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=False)
+                        dlg.disable_item(GROUP_NAME_LIST[i])
+                    if returnCode == 'stop': return 'stop'
+                elif i == 3: 
+                    returnCode = check_table_data(dlg,TABLE_GREEN)
+                    if returnCode == 0: 
+                        JPT.MsgOut('Error: Green table data checking failed')
+                        return 0
+                    elif returnCode == -1: 
+                        dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=False)
+                        dlg.disable_item(GROUP_NAME_LIST[i])
+                    elif returnCode == 'stop': return 'stop'
+                elif i == 4:
+                    if not os.path.isdir(result_folder):
+                        result_folder = os.path.join(os.path.join(output_dir,'SPL'),'Result')
+                        dlg.set_item_text(name = BROWSE_POST, text = result_folder)
+                    if dlg.isbutton_checked(name=CHECK_ADD_MODEL) == True:
+                        if not dlg.get_item_text(name=TEXT_MODEL_NAME):
+                            JPT.MessageBoxPSJ('Error: The name for new model is incorrect!',JPT.MsgBoxType.MB_WARNING_OK)
+                            return 'stop'
+                    try:
+                        xmin = float(xmin)
+                        xmax = float(xmax)
+                        ymin = float(ymin)
+                        ymax = float(ymax)
+                    except:
+                        code = JPT.MessageBoxPSJ('Warning: Axes setting is incorrect!\n\nDefault:\nx_min=0.0 , x_max=3000.0\ny_min=0.0 , y_max=125.0\n\nDo you want to use default setting?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                        if code != 'NO': 
+                            dlg.set_item_text(name=TEXT_X_MIN,text='0.0')
+                            dlg.set_item_text(name=TEXT_X_MAX,text='3000.0')
+                            dlg.set_item_text(name=TEXT_Y_MIN,text='0.0')
+                            dlg.set_item_text(name=TEXT_Y_MAX,text='125.0')
+                        return 'stop'
+                    if xmin >= xmax or ymin >= ymax:
+                        code = JPT.MessageBoxPSJ('Warning: Axes setting is incorrect!\n\nX Default: x_min=0.0 , x_max=3000.0\nY Default: y_min=0.0 , y_max=125.0\n\nDo you want to use default setting?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+                        if code != 'NO': 
+                            if xmin >= xmax:
+                                dlg.set_item_text(name=TEXT_X_MAX,text='3000.0')
+                                dlg.set_item_text(name=TEXT_X_MIN,text='0.0')
+                            if ymin >= ymax:
+                                dlg.set_item_text(name=TEXT_Y_MAX,text='125.0')
+                                dlg.set_item_text(name=TEXT_Y_MIN,text='0.0')
+                        return 'stop'
+                    list_data = initial_table_color(dlg,result_folder)
+                    if list_data == 'stop': return 'stop'
+                    if list_data == 0 or len(list_data) == 0: return 0
+                    if list_data == 1:
+                        dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=False)
+                        dlg.disable_item(GROUP_NAME_LIST[i])
+                    if on_update_table_color(dlg,list_data) == 0: return 0
+                    for i in range(0,len(list_data)-1):
+                        for k in range(i+1,len(list_data)):
+                            if list_data[k][CURVE_COLOR] == list_data[i][CURVE_COLOR]:
+                                if list_data[k][CURVE_TYPE] == list_data[i][CURVE_TYPE]:
+                                    JPT.MessageBoxPSJ('Warning: Plt has duplicate curve shape!',JPT.MsgBoxType.MB_WARNING_OK)
+                                    return 'stop'
+        if crTree(output_dir) == 0: 
+            JPT.MsgOut('Error: Failed in creating output folder')
+            return 0
+        if dlg.isbutton_checked(name=CHECK_NAME_LIST[1]) == True or dlg.isbutton_checked(name=CHECK_NAME_LIST[2]) == True or dlg.isbutton_checked(name=CHECK_NAME_LIST[3]) == True:
+            if not ftpHostName: 
+                JPT.MsgOut('Error: Cannot find "ftpHostName"')
+                JPT.MessageBoxPSJ('Error: Cannot find "ftpHostName"!',JPT.MsgBoxType.MB_WARNING_OK)
+                return 'stop'
+            if not ftpUser:
+                JPT.MsgOut('Error: Cannot find "ftpUser"')
+                JPT.MessageBoxPSJ('Error: Cannot find "ftpUser"!',JPT.MsgBoxType.MB_WARNING_OK)
+                return 'stop'
+            if not ftpPass:
+                JPT.MsgOut('Error: Cannot find "ftpPasswd"')
+                JPT.MessageBoxPSJ('Error: Cannot find "ftpPasswd"!',JPT.MsgBoxType.MB_WARNING_OK)
+                return 'stop'
+            if not teraterm or not os.path.isfile(teraterm):
+                JPT.MsgOut('Error: Cannot find "TeraTerm"')
+                JPT.MessageBoxPSJ('Error: Cannot find "TeraTerm"!',JPT.MsgBoxType.MB_WARNING_OK)
+                return 'stop'
+        if dlg.isbutton_checked(name=CHECK_NAME_LIST[4]) == True:
+            if not pltviewer or not os.path.isfile(pltviewer):
+                JPT.MsgOut('Error: Cannot find "PLT_dir"')
+                JPT.MessageBoxPSJ('Error: Cannot find "PLT_dir"!',JPT.MsgBoxType.MB_WARNING_OK)
+                return 'stop'
+        return 1
+    except: return 0
+
+def on_button_select_clicked(dlg):
+    try:
+        if not dlg or len(CHECK_NAME_LIST)!=len(GROUP_NAME_LIST): return 0
+        for i in range(0,len(CHECK_NAME_LIST)):
+            dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=True)
+            dlg.enable_item(GROUP_NAME_LIST[i])
+        return 1
+    except: return 0
+
+def on_button_deselect_clicked(dlg):
+    try:
+        if not dlg or len(CHECK_NAME_LIST)!=len(GROUP_NAME_LIST): return 0
+        for i in range(0,len(CHECK_NAME_LIST)):
+            dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=False)
+            dlg.disable_item(GROUP_NAME_LIST[i])
+        return 1
+    except: return 0
+
+def create_run_cmd(dlg,log_file,file):
+    try:
+        if not dlg: return 0
+        if not os.path.isfile(log_file): return 0
+        run_file = open(file,"w")
+        if not run_file: return 0
+        run_file.write('@echo off\n')
+        run_file.write('rem -----------------------------------------------\n')
+        run_file.write('rem (C) TechnoStar Co. Ltd\n')
+        run_file.write('rem Created by Misa: {}\n'.format(datetime.datetime.now()))
+        run_file.write('rem -----------------------------------------------\n\n')
+        run_file.write('set log_file="{}"\n'.format(log_file))
+        run_file.write('set out_dir="{}"\n\n'.format(dlg.get_item_text(name=BROWSE_OUT)))
+        run_file.write('set Python_3="{}"'.format(dlg.get_item_text(name=BROWSE_PYTHON)))
+        run_file.write('\n\n')
+        run_file.write('%Python_3% -u AutoRun.py %{}% %{}%'.format('log_file','out_dir'))
+        run_file.write('\n\necho DONE!!!')
+        run_file.write('\npause')
+        run_file.close()
+        return 1
+    except: return 0
+
+def save_dlg(dlg,file):
+    try:
+        log_file = open(file,"w")
+        if not log_file: return 0
+        log_file.write(dlg.get_item_text(name=TEXT_FTP_ADDRESS))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_FTP_USER))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_FTP_PASS))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=BROWSE_TERATERM))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=BROWSE_PLT_DIR))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=BROWSE_PYTHON))
+        log_file.write('\n')
+        log_file.write(dlg.get_item_text(name=BROWSE_OUT))
+        log_file.write(',')
+        for i in range(0,len(CHECK_NAME_LIST)):
+            log_file.write(str(dlg.isbutton_checked(name=CHECK_NAME_LIST[i])))
+            log_file.write(',')
+        log_file.write(str(dlg.isbutton_checked(name=CHECK_OP2)))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=BROWSE_EXCITE))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_EXCITENAME))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_START_FREQ))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_END_FREQ))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_UPLOAD))
+        log_file.write('\n')
+        log_file.write(dlg.get_item_text(name=BROWSE_POST))
+        log_file.write(',')
+        log_file.write(str(dlg.isbutton_checked(name=CHECK_ADD_MODEL)))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_MODEL_NAME))
+        log_file.write(',')
+        log_file.write(TEXT_MODEL_CNT)
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_X_MIN))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_X_MAX))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_Y_MIN))
+        log_file.write(',')
+        log_file.write(dlg.get_item_text(name=TEXT_Y_MAX))
+        log_file.write('\n')
+        if len(CRANKSHAFT_KEY) != 0:
+            CS_key = ''
+            for i in range(0,len(CRANKSHAFT_KEY)):
+                CS_key += (lambda i: CRANKSHAFT_KEY[i] if i == len(CRANKSHAFT_KEY)-1 else CRANKSHAFT_KEY[i] + ',')(i)
+            log_file.write(CS_key)
+        for table in range(0,TABLE_TOL):
+            log_file.write('\n###########################################')
+            for row in range(0,dlg.get_total_row(name=TABLE_NAME[table])):
+                log_file.write('\n')
+                tol_col = dlg.get_total_column(name=TABLE_NAME[table])
+                for col in range(0,tol_col):
+                    log_file.write(dlg.get_cell_value(name=TABLE_NAME[table],cell_row_id=row,cell_column_id=col))
+                    if col < tol_col-1: log_file.write(',')
+        log_file.write('\n###########################################')
+        log_file.close()
+        return 1
+    except: return 0
+
+def on_button_save_changed(dlg):
+    try:
+        log_dir = os.path.join(m_settingDir,"_log")
+        if not dlg or crTree(log_dir) == 0: return 0
+        log_file = os.path.join(log_dir,"log_ACOP.txt")
+        if save_dlg(dlg,log_file) == 0: return 0
+        JPT.MsgOut('JPT-GUI was saved')
+        return 1
+    except: return 0
+
+def on_button_save_as(dlg):
+    try:
+        log_file = os.path.join(os.path.join(m_settingDir,"_log"),"log_ACOP.txt")
+        if save_dlg(dlg,log_file) == 0: return 0
+        root = tk.Tk()
+        root.withdraw()
+        file_save = filedialog.asksaveasfile(filetypes=[("Text Document","*.txt")],defaultextension=".txt")
+        with open(log_file,"r") as file:
+            file_save.write(file.read())
+        file_save.close()
+        root.destroy()
+        JPT.MsgOut('JPT-GUI was saved')
+        return 1
+    except: return 0
+
+def read_data_from_log(dlg,file):
+    try:
+        if not dlg: return 0
+        log_file = open(file,"r")
+        if not log_file: return 0
+        table = -1
+        row_id = 0
+        cnt = 0
+        for line in log_file.readlines():
+            data = list(line.split(','))
+            if '###########################################' in line: 
+                table += 1
+                row_id = 0
+            elif table < 0:
+                if cnt == 0:
+                    dlg.set_item_text(name=TEXT_FTP_ADDRESS,text=data[0].strip())
+                    dlg.set_item_text(name=TEXT_FTP_USER,text=data[1].strip())
+                    dlg.set_item_text(name=TEXT_FTP_PASS,text=data[2].strip())
+                    dlg.set_item_text(name=BROWSE_TERATERM,text=data[3].strip())
+                    dlg.set_item_text(name=BROWSE_PLT_DIR,text=data[4].strip())
+                    dlg.set_item_text(name=BROWSE_PYTHON,text=data[5].strip())
+                elif cnt == 1:
+                    dlg.set_item_text(name=BROWSE_OUT,text=data[0].strip())
+                    for i in range(0,len(CHECK_NAME_LIST)):
+                        if data[i+1].strip() == 'True':
+                            dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=True)
+                        elif data[i+1].strip() == 'False':
+                            dlg.set_checkbox_state(name=CHECK_NAME_LIST[i],checked=False)
+                    on_checkbox(dlg)
+                    if data[len(CHECK_NAME_LIST)+1].strip() == 'False':
+                        dlg.set_checkbox_state(name=CHECK_OP2,checked=False)
+                    else: dlg.set_checkbox_state(name=CHECK_OP2,checked=True)
+                    on_checkbox_op2(dlg)
+                    dlg.set_item_text(name=BROWSE_EXCITE,text=data[len(CHECK_NAME_LIST)+2].strip())
+                    dlg.set_item_text(name=TEXT_EXCITENAME,text=data[len(CHECK_NAME_LIST)+3].strip())
+                    dlg.set_item_text(name=TEXT_START_FREQ,text=data[len(CHECK_NAME_LIST)+4].strip())
+                    dlg.set_item_text(name=TEXT_END_FREQ,text=data[len(CHECK_NAME_LIST)+5].strip())
+                    dlg.set_item_text(name=TEXT_UPLOAD,text=data[len(CHECK_NAME_LIST)+6].strip())
+                elif cnt == 2:
+                    dlg.set_item_text(name=BROWSE_POST,text=data[0].strip())
+                    if data[1].strip() == 'True':
+                        dlg.set_checkbox_state(name=CHECK_ADD_MODEL,checked=True)
+                    else: dlg.set_checkbox_state(name=CHECK_ADD_MODEL,checked=False)
+                    on_checkbox_post(dlg)
+                    dlg.set_item_text(name=TEXT_MODEL_NAME,text=data[2].strip())
+                    dlg.set_item_text(name=TEXT_X_MIN,text=data[4].strip())
+                    dlg.set_item_text(name=TEXT_X_MAX,text=data[5].strip())
+                    dlg.set_item_text(name=TEXT_Y_MIN,text=data[6].strip())
+                    dlg.set_item_text(name=TEXT_Y_MAX,text=data[7].strip())
+                elif cnt == 3:
+                    global CRANKSHAFT_KEY
+                    if len(data)>0: CRANKSHAFT_KEY = (lambda x: [i.strip() for i in x if i and i.strip()])(data)
+            else:
+                if row_id >= dlg.get_total_row(name=TABLE_NAME[table]):
+                    dlg.insert_table_rows(name=TABLE_NAME[table],row_num=int(1),position=int(row_id))
+                for col in range(0,dlg.get_total_column(name=TABLE_NAME[table])):
+                    dlg.set_cell_value(name=TABLE_NAME[table],cell_row_id=row_id,cell_column_id=col,value=data[col].strip())
+                row_id += 1
+            cnt += 1
+        log_file.close()
+        return 1
+    except: return 0
+
+def initialize(dlg):
+    try:
+        if not os.path.isdir(m_settingDir) or not os.path.isdir(m_libDir): return 0
+        log_file = os.path.join(os.path.join(m_settingDir,"_log"),"log_ACOP.txt")
+        if os.path.isfile(log_file): read_data_from_log(dlg,log_file)
+        list_data = initial_table_color(dlg,dlg.get_item_text(name=BROWSE_POST))
+        if list_data == 0 or list_data == 'stop' or len(list_data) == 0: return 'no_data'
+        if on_update_table_color(dlg,list_data) == 0: return 'no_data'
+        if on_checkbox(dlg) == 0: return 'no_data'
+        JPT.ClearLog()
+        return 1
+    except: return 0
+
+def on_button_load_data_clicked(dlg):
+    # Browse file on window
+    root = tk.Tk()
+    root.withdraw()
+    file_path = filedialog.askopenfilename()
+    read_data_from_log(dlg,file_path)
+    root.destroy()
+
+def excute(dlg):
+    try:
+        log_dir = os.path.join(m_settingDir,"_log")
+        if not dlg or crTree(log_dir) == 0: return 0
+        log_file = os.path.join(log_dir,"log_ACOP.txt")
+        run_file = os.path.join(m_libDir,"run_ACOP.cmd")
+        returnCode = check_data_from_dlg(dlg)
+        if returnCode == 0: return 0
+        elif returnCode == 'stop': return 'stop'
+        if save_dlg(dlg,log_file) == 0: return 0
+        if create_run_cmd(dlg,log_file,run_file) == 0: return 0
+        os.chdir(m_libDir)
+        redirect_stdout = os.path.join(dlg.get_item_text(name=BROWSE_OUT),'trace.txt')
+        cmd = "powershell " + run_file + " | ForEach-Object{[Console]::WriteLine($_); [Console]::Out.Flush(); $_} | Set-Content " + redirect_stdout
+        subprocess.Popen(cmd)
+        time.sleep(2)
+        os.remove(run_file)
+        return 1
+    except: return 0
+
+def on_button_apply_clicked(dlg):
+    try:
+        if not dlg: return 0
+        returnCode = excute(dlg)
+        if returnCode == 0: print('FAILED.')
+        elif returnCode == 'stop': return 'stop'
+        else: print('DONE.')
+        return 1
+    except: return 0
+
+def on_button_cancel_clicked(dlg):
+    try:
+        dlg.close()
+        return 1
+    except: return 0
+
+def on_button_run_clicked_m(dlg):
+    try:
+        returnCode = on_button_apply_clicked(dlg)
+        if returnCode == 'stop': return 'stop'
+        else: on_button_cancel_clicked(dlg)
+        return 1
+    except: return 0
+
+def on_button_set_curve_color(dlg):
+    try:
+        if not dlg: return 0
+        result_folder = dlg.get_item_text(name=BROWSE_POST)
+        if not result_folder or not os.path.isdir(result_folder):
+            returnCode = JPT.MessageBoxPSJ('Warning: Folder for compared model is incorrect! \n\n Do you want to continue',JPT.MsgBoxType.MB_WARNING_YESNO)
+            if returnCode == 'NO': return 'stop'
+        list_data = initial_table_color(dlg,result_folder)
+        if list_data == 0 or len(list_data) == 0 or list_data == 'stop': return 0
+        if create_color_dlg(list_data,result_folder,dlg) == 0: return 0
+        if on_update_table_color(dlg,list_data) == 0: return 0
+        return 1
+    except: return 0
+
+def on_rename_button(dlg):
+    try:
+        if not dlg: return 0
+        dir = dlg.get_item_text(name=BROWSE_POST)
+        if not dir or not os.path.isdir(dir):
+            JPT.MessageBoxPSJ('Result folder is incorrect!',JPT.MsgBoxType.MB_WARNING_OK)
+            return 0
+        else: 
+            currentwnd = []
+            p = subprocess.Popen([os.path.join(os.getenv('WINDIR'),'explorer.exe'),dir], stdout=subprocess.PIPE, shell=True) 
+            while True:
+                exit_code = p.poll()
+                if exit_code is not None: break
+            time.sleep(1)
+            def enumHandler(hwnd,lParam):
+                if win32gui.GetWindowText(hwnd) == os.path.split(dir)[-1]: currentwnd.append(hwnd)
+            win32gui.EnumWindows(enumHandler,None)
+            if len(currentwnd) == 0: return 0
+            while True:
+                if win32gui.IsWindowVisible(currentwnd[0]) != 1: break
+            list_data = initial_table_color(dlg,dir)
+            if list_data == 0 or len(list_data) == 0 or list_data == 'stop': return 0
+            if on_update_table_color(dlg,list_data) == 0: return 0
+        return 1
+    except: return 0
+
+def on_check_name(dlg):
+    try:
+        if not dlg: return 0
+        result_folder = dlg.get_item_text(name=BROWSE_POST)
+        if not result_folder or not os.path.isdir(result_folder): return 0
+        subfolder = [f.name for f in os.scandir(result_folder) if f.is_dir()]
+        if len(subfolder) == 0: return 0
+        model_name = dlg.get_item_text(name=TEXT_MODEL_NAME)
+        if model_name != '':
+            model_name = '{}_{}'.format(len(subfolder)+1,model_name)
+        for i in range(0,len(subfolder)):
+            if dlg.isbutton_checked(name=CHECK_ADD_MODEL) == True:
+                if model_name == subfolder[i]:
+                    JPT.MessageBoxPSJ('Warning: The name of new model has already existed!',JPT.MsgBoxType.MB_WARNING_OK)
+                    return 'stop'
+        dlg.set_cell_value(name=TABLE_NAME[TABLE_COLOR],cell_row_id=dlg.get_total_row(name=TABLE_NAME[TABLE_COLOR])-1,cell_column_id=0,value=model_name)
+        return 1
+    except: return 0
+
+def on_check_xmin(dlg):
+    try:
+        if not dlg: return 0
+        xmin = float(dlg.get_item_text(name=TEXT_X_MIN))
+        xmax = float(dlg.get_item_text(name=TEXT_X_MAX))
+        if xmin and xmax and xmax <= xmin:
+            JPT.MessageBoxPSJ('Warning: x_min should be smaller than x_max!',JPT.MsgBoxType.MB_WARNING_OK)
+            return 'stop'
+        return 1
+    except: return 0
+
+def on_check_ymin(dlg):
+    try:
+        if not dlg: return 0
+        ymin = float(dlg.get_item_text(name=TEXT_Y_MIN))
+        ymax = float(dlg.get_item_text(name=TEXT_Y_MAX))
+        if ymin and ymax and ymax <= ymin:
+            JPT.MessageBoxPSJ('Warning: y_min should be smaller than y_max!',JPT.MsgBoxType.MB_WARNING_OK)
+            return 'stop'
+        return 1
+    except: return 0
+
+def get_data_from_entry_event(event):
+    try:
+        if event.widget.name == 'recovery':
+            m_table_data[TABLE_RECOV][0][RECOV_FOLDER] = event.widget.get()
+        elif event.widget.name == 'green':
+            m_table_data[TABLE_GREEN][0][GREEN_FOLDER] = event.widget.get()
+        elif event.widget.name == 'crank-flag':
+            global CRANKSHAFT_KEY
+            try:
+                CRANKSHAFT_KEY = (lambda x: [i.strip() for i in x if i and i.strip()])(list(event.widget.get().split(',')))
+            except: CRANKSHAFT_KEY = []
+        return 1
+    except: return 0
+
+def create_from_excite_data(root,dlg):
+    try:
+        root.destroy()
+        submit_folder = dlg.get_item_text(name=TEXT_UPLOAD)
+        ftpUser = dlg.get_item_text(name=TEXT_FTP_USER)
+        if not submit_folder or submit_folder.find('/gpfs/home00/{}'.format(ftpUser)) == -1:
+            JPT.MessageBoxPSJ('Cannot modify "{}" by ID"{}"!'.format(submit_folder,ftpUser)+'\n\nPlease modify upload folder!',JPT.MsgBoxType.MB_INFORMATION_OK)
+            return 'stop'
+        JPT.MessageBoxPSJ('Submit data will be auto-created from excite data.\nPlease make sure excite data has already been checked.',JPT.MsgBoxType.MB_INFORMATION_OK)
+        excite_dir = dlg.get_item_text(name=BROWSE_EXCITE)
+        try:
+            subfolder = [f.name for f in os.scandir(excite_dir) if f.is_dir()]
+        except:  
+            JPT.MessageBoxPSJ('Error: Excite directory is incorrect!',JPT.MsgBoxType.MB_WARNING_OK)
+            return 'stop'
+        if len(subfolder) == 0:
+            JPT.MessageBoxPSJ('Error: Excite directory is empty!',JPT.MsgBoxType.MB_WARNING_OK)
+            return 'stop' 
+        else:
+            excite_ename_module = dlg.get_item_text(name=TEXT_EXCITENAME)
+            if not excite_ename_module:
+                JPT.MessageBoxPSJ('Error: Excite module name is empty!',JPT.MsgBoxType.MB_WARNING_OK)
+                return 'stop'
+            else:
+                # Clear all
+                if on_table_menu(dlg,name=TABLE_NAME[TABLE_RECOV],menu='Clear all') == 0: return 0
+                flag_found = -1
+                for child in subfolder:
+                    if child.find(excite_ename_module) != -1 and child.find("rpm") != -1:
+                        rpm = list(child.split('.'))[-1].strip()
+                        for row in range(0,dlg.get_total_row(name=TABLE_NAME[TABLE_EXCITE])):
+                            header_file = dlg.get_cell_value(name=TABLE_NAME[TABLE_EXCITE],cell_row_id=row,cell_column_id=EXCITE_HEADER)
+                            CS_flag = dlg.get_cell_value(name=TABLE_NAME[TABLE_EXCITE],cell_row_id=row,cell_column_id=EXCITE_CSFLAG)
+                            if not header_file: continue
+                            flag_found += 1
+                            dlg.insert_table_rows(name=TABLE_NAME[TABLE_RECOV],row_num=int(1),position=int(flag_found))
+                            dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_FOLDER,value=submit_folder)
+                            dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_FILE,value='{}-{}.dat'.format(header_file,rpm))
+                            dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_TIME,value='30m')
+                            if CS_flag == 'On' or CS_flag == 'on' or CS_flag == 'ON' or CS_flag == 'oN':
+                                dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_SOLVER,value='nast')
+                                dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_VERSION,value='5')
+                                dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_QUEUE,value='1')
+                            else:
+                                dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_SOLVER,value='nastc')
+                                dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_VERSION,value='1')
+                                dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_QUEUE,value='2')
+                get_data_from_table(dlg,TABLE_RECOV)            
+                if flag_found == -1:
+                    JPT.MessageBoxPSJ('Error: No excite module was found!',JPT.MsgBoxType.MB_WARNING_OK)
+                    return 'stop'
+        return 1
+    except: return 0
+
+def create_from_directory(root,dlg):
+    try:
+        root.destroy()
+        crankKey = ''
+        if len(CRANKSHAFT_KEY) != 0:
+            for i in range(0,len(CRANKSHAFT_KEY)):
+                crankKey += (lambda i: CRANKSHAFT_KEY[i] if i == len(CRANKSHAFT_KEY)-1 else CRANKSHAFT_KEY[i] + ',')(i)
+        submit_folder = dlg.get_item_text(name=TEXT_UPLOAD)
+        m_table_data[TABLE_RECOV] = []
+        list_data = []
+        for col in range(0,dlg.get_total_column(name=TABLE_NAME[TABLE_RECOV])):
+            if col == RECOV_FOLDER: list_data.append(submit_folder)
+            else: list_data.append('')
+        if len(list_data) != dlg.get_total_column(name=TABLE_NAME[TABLE_RECOV]): return 0
+        m_table_data[TABLE_RECOV].append(list_data)
+        if len(m_table_data[TABLE_RECOV]) == 0: return 0
+        root2 = tk.Tk()
+        root2.geometry('388x133')
+        root2.title('Server setting')
+        ttk.Label(root2,text='Submit directory:',foreground='black').grid(column=0,row=1,padx=10,pady=5,sticky='w')
+        entry_text = tk.StringVar()
+        entry_text.set(submit_folder)
+        entry = ttk.Entry(root2,textvariable=entry_text,foreground='black',width=60)
+        entry.grid(column=0,row=2,padx=10,pady=5,sticky='w')
+        entry.name = 'recovery'
+        entry.bind("<KeyRelease>",get_data_from_entry_event)
+        ttk.Label(root2,text='Crankshaft Key Word:',foreground='black').grid(column=0,row=4,padx=10,pady=5,sticky='w')
+        crank_text = tk.StringVar()
+        crank_text.set(crankKey)
+        crank_entry = ttk.Entry(root2,textvariable=crank_text,foreground='black',width=60)
+        crank_entry.grid(column=0,row=5,padx=10,pady=5,sticky='w')
+        crank_entry.name = 'crank-flag'
+        crank_entry.bind("<KeyRelease>",get_data_from_entry_event)
+        root2.mainloop()
+        submit_folder = m_table_data[TABLE_RECOV][0][RECOV_FOLDER]
+        try:
+            ftp = ftplib.FTP(dlg.get_item_text(TEXT_FTP_ADDRESS))
+            ftpLoginMessage = ftp.login(dlg.get_item_text(TEXT_FTP_USER),dlg.get_item_text(TEXT_FTP_PASS))
+        except:
+            JPT.MsgOut('Error: Login FFTP failed!')
+            JPT.MessageBoxPSJ('Error: Login FFTP failed!\n\nPlease check FTP data in [Directory Setting]!',JPT.MsgBoxType.MB_INFORMATION_OK)
+            return 'stop'
+        try:
+            ftpResMsg = ftp.cwd(submit_folder)
+        except:
+            JPT.MsgOut('Error: Server submit folder is incorrect!')
+            JPT.MessageBoxPSJ('Error: {} is incorrect!'.format(submit_folder),JPT.MsgBoxType.MB_INFORMATION_OK)
+            ftp.quit()
+            return 'stop'
+        if on_table_menu(dlg,name=TABLE_NAME[TABLE_RECOV],menu='Clear all') == 0: return 0
+        flag_found = -1
+        for file in ftp.nlst():
+            flag_CS = False
+            if file.find('rpm.dat') != -1:
+                flag_found += 1
+                dlg.insert_table_rows(name=TABLE_NAME[TABLE_RECOV],row_num=int(1),position=int(flag_found))
+                dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_FOLDER,value=submit_folder)
+                dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_FILE,value=file)
+                if len(CRANKSHAFT_KEY) > 0:
+                    for key in CRANKSHAFT_KEY:
+                        if file.find(key) != -1:
+                            dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_SOLVER,value='nast')
+                            dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_VERSION,value='5')
+                            dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_QUEUE,value='1')
+                            dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_TIME,value='30m')
+                            flag_CS = True
+                            break
+                if flag_CS == False:
+                    dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_SOLVER,value='nastc')
+                    dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_VERSION,value='1')
+                    dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_QUEUE,value='2')
+                    dlg.set_cell_value(name=TABLE_NAME[TABLE_RECOV],cell_row_id=flag_found,cell_column_id=RECOV_TIME,value='30m')
+        get_data_from_table(dlg,TABLE_RECOV)    
+        ftp.quit()
+        if flag_found == -1:
+            JPT.MessageBoxPSJ("Error: {} -> no '.dat' was found!".format(submit_folder),JPT.MsgBoxType.MB_WARNING_OK)
+            return 'stop'
+    except: return 0
+
+def on_create_table_recov_button(dlg):
+    try:
+        if not dlg: return 0
+        code = JPT.MessageBoxPSJ('Warning: Current table data will be deleted!\n\nDo you want to continue?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+        if code == 'NO': return 'stop'
+        root = tk.Tk()
+        root.geometry('300x100')
+        root.title('Create recovery table')
+        ttk.Button(root,text='From excite data',command=partial(create_from_excite_data, root,dlg),width=20).grid(column=0,row=1,padx=10,pady=20,sticky='w')
+        ttk.Button(root,text='From directory',command=partial(create_from_directory, root,dlg),width=20).grid(column=1,row=1,padx=10,pady=20,sticky='w')
+        root.mainloop()
+        JPT.MsgOut('Table recovery has been created')
+        return 1
+    except: 
+        JPT.MessageBoxPSJ('Error: Create table failed!',JPT.MsgBoxType.MB_WARNING_OK)
+        return 0
+
+def on_create_table_green_button(dlg):
+    try:
+        if not dlg: return 0
+        code = JPT.MessageBoxPSJ('Warning: Current table data will be deleted!\n\nDo you want to continue?',JPT.MsgBoxType.MB_INFORMATION_YESNO)
+        if code == 'NO': return 'stop'
+        submit_folder = dlg.get_item_text(name=TEXT_UPLOAD) + '/SPL'
+        m_table_data[TABLE_GREEN] = []
+        list_data = []
+        for col in range(0,dlg.get_total_column(name=TABLE_NAME[TABLE_GREEN])):
+            if col == 0: list_data.append(submit_folder)
+            else: list_data.append('')
+        if len(list_data) != dlg.get_total_column(name=TABLE_NAME[TABLE_GREEN]): return 0
+        m_table_data[TABLE_GREEN].append(list_data)
+        if len(m_table_data[TABLE_GREEN]) == 0: return 0
+        root = tk.Tk()
+        root.geometry('388x100')
+        root.title('Server setting')
+        ttk.Label(root,text='Submit directory:',foreground='black').grid(column=0,row=1,padx=10,pady=5,sticky='w')
+        entry_text = tk.StringVar()
+        entry_text.set(submit_folder)
+        entry = ttk.Entry(root,textvariable=entry_text,foreground='black',width=60)
+        entry.grid(column=0,row=2,padx=10,pady=5,sticky='w')
+        entry.name = 'green'
+        entry.bind("<KeyRelease>",get_data_from_entry_event)
+        root.mainloop()
+        submit_folder = m_table_data[TABLE_GREEN][0][GREEN_FOLDER]
+        try:
+            ftp = ftplib.FTP(dlg.get_item_text(TEXT_FTP_ADDRESS))
+            ftpLoginMessage = ftp.login(dlg.get_item_text(TEXT_FTP_USER),dlg.get_item_text(TEXT_FTP_PASS))
+        except:
+            JPT.MsgOut('Error: Login FFTP failed!')
+            JPT.MessageBoxPSJ('Error: Login FFTP failed!\n\nPlease check FTP data in [Directory Setting]!',JPT.MsgBoxType.MB_INFORMATION_OK)
+            return 'stop'
+        try:
+            ftpResMsg = ftp.cwd(submit_folder)
+        except:
+            JPT.MsgOut('Error: Server submit folder is incorrect!')
+            JPT.MessageBoxPSJ('Error: {} is incorrect!'.format(submit_folder),JPT.MsgBoxType.MB_INFORMATION_OK)
+            ftp.quit()
+            return 'stop'
+        if on_table_menu(dlg,name=TABLE_NAME[TABLE_GREEN],menu='Clear all') == 0: return 0
+        flag_found = -1
+        for file in ftp.nlst():
+            if file.find('-2.edat') != -1:
+                flag_found += 1
+                dlg.insert_table_rows(name=TABLE_NAME[TABLE_GREEN],row_num=int(1),position=int(flag_found))
+                dlg.set_cell_value(name=TABLE_NAME[TABLE_GREEN],cell_row_id=flag_found,cell_column_id=GREEN_FOLDER,value=submit_folder)
+                dlg.set_cell_value(name=TABLE_NAME[TABLE_GREEN],cell_row_id=flag_found,cell_column_id=GREEN_FILE,value=file)
+                dlg.set_cell_value(name=TABLE_NAME[TABLE_GREEN],cell_row_id=flag_found,cell_column_id=GREEN_METHOD,value='3')
+        get_data_from_table(dlg,TABLE_GREEN)    
+        ftp.quit()
+        if flag_found == -1:
+            JPT.MessageBoxPSJ("Error: {} -> no '-2.edat' was found!".format(submit_folder),JPT.MsgBoxType.MB_WARNING_OK)
+            return 'stop'
+        JPT.MsgOut('Table ACTRAN has been created')
+        return 1
+    except: return 0
+
+def on_ftp_passwd(dlg):
+    try:
+        if not dlg: return 0
+        user = dlg.get_item_text(name=TEXT_FTP_USER)
+        if user and user != "":
+            dlg.set_item_text(name=TEXT_FTP_PASS,text=str(user)+"xxx")
+        else: dlg.set_item_text(name=TEXT_FTP_PASS,text="")
+        return 1
+    except: return 0
+
+def on_check_freq(dlg):
+    try:
+        if not dlg: return 0
+        start_freq = float(dlg.get_item_text(name=TEXT_START_FREQ))
+        end_freq = float(dlg.get_item_text(name=TEXT_END_FREQ))
+        if start_freq > end_freq:
+            JPT.MessageBoxPSJ('Warning: start.freq should be smaller than end.freq!',JPT.MsgBoxType.MB_WARNING_OK)
+            return 'stop'
+        return 1
+    except: return 0
+
+def main():
+    try:
+        # GUI creator
+        dlg=JDGCreator(title="[NVH] Acoustic Analysis",include_apply=False,include_ok=False,include_cancel=False)
+        dlg.add_pagesctrl(name="PagesCtrl2",width=260,height=160,current_page=1,layout="Window")
+        dlg.add_pageitem(name="PagesCtrl2",page_name="setting_dir",page_header="Directory Setting")
+        dlg.add_layout(name="Layout31",margin=[6,0,6,0],orientation=orientation.vertical,layout="setting_dir")
+        dlg.add_layout(name="Layout10",orientation=orientation.horizontal,layout="Layout31")
+        dlg.add_label(name="Label16",text="ftpHostName:",width=70,text_halign="left",text_valign="top",layout="Layout10")
+        dlg.add_textbox(name="ftpHostName",layout="Layout10")
+        dlg.add_label(name="Label18",width=220,text_halign="left",text_valign="top",layout="Layout10")
+        dlg.add_layout(name="Layout11",orientation=orientation.horizontal,layout="Layout31")
+        dlg.add_label(name="Label19",text="ftpUser:",width=70,text_halign="left",text_valign="top",layout="Layout11")
+        dlg.add_textbox(name="ftpUser",layout="Layout11")
+        dlg.add_label(name="Label21",width=220,text_halign="left",text_valign="top",layout="Layout11")
+        dlg.add_layout(name="Layout12",orientation=orientation.horizontal,layout="Layout31")
+        dlg.add_label(name="Label22",text="ftpPasswd:",width=70,text_halign="left",text_valign="top",layout="Layout12")
+        dlg.add_textbox(name="ftpPasswd",layout="Layout12")
+        dlg.add_label(name="Label24",width=220,text_halign="left",text_valign="top",layout="Layout12")
+        dlg.add_layout(name="Layout13",orientation=orientation.horizontal,layout="Layout31")
+        dlg.add_label(name="Label23",text="TeraTerm:",width=70,text_halign="left",text_valign="top",layout="Layout13")
+        dlg.add_browser(name="TeraTerm",default=os.path.join('C:\Program Files (x86)','teraterm','ttpmacro.exe'),mode="file",file_filter="All Files(*.*)|*.*||",layout="Layout13")
+        dlg.add_layout(name="Layout14",orientation=orientation.horizontal,layout="Layout31")
+        dlg.add_label(name="Label27",text="PLT_dir:",width=70,text_halign="left",text_valign="top",layout="Layout14")
+        dlg.add_browser(name="PLT_dir",default='C:\FFT\Actran_16.0\\bin\pltviewer.bat',mode="file",file_filter="All Files(*.*)|*.*||",layout="Layout14")
+        dlg.add_layout(name="Layout15",orientation=orientation.horizontal,layout="Layout31")
+        dlg.add_label(name="Label29",text="Python_dir:",width=70,text_halign="left",text_valign="top",layout="Layout15")
+        dlg.add_browser(name="Python_dir",default='F:\ACTRAN_training\python3.5\python3.5\win64\python.exe',mode="file",file_filter="All Files(*.*)|*.*||",layout="Layout15")
+        dlg.add_pageitem(name="PagesCtrl2",page_name="acoustic_process",page_header="Acoustic Process")
+        dlg.add_groupbox(name="group_option",text="0_ Option",layout="acoustic_process")
+        dlg.add_layout(name="Layout38",margin=[6,0,6,0],orientation=orientation.horizontal,layout="group_option")
+        dlg.add_layout(name="Layout45",margin=[0,8,0,8],orientation=orientation.vertical,layout="Layout38")
+        dlg.add_checkbox(name="check_isDat",text="Step 1: Create Header for Recovery",checked=True,layout="Layout45")
+        dlg.add_checkbox(name="check_isUpload",text="Step 2: Upload Header File to Server",checked=True,layout="Layout45")
+        dlg.add_checkbox(name="check_isRecov",text="Step 3: Recovery Analysis",checked=True,layout="Layout45")
+        dlg.add_layout(name="Layout46",margin=[0,8,0,8],orientation=orientation.vertical,layout="Layout38")
+        dlg.add_checkbox(name="check_isGreen",text="Step 4: Green Analysis",checked=True,layout="Layout46")
+        dlg.add_checkbox(name="check_isPost",text="Step 5: Post Processing (SPL result)",checked=True,layout="Layout46")
+        dlg.add_layout(name="Layout47",margin=[0,3,0,0],orientation=orientation.vertical,layout="Layout38")
+        dlg.add_button(name="button_checkAll",text="Select All",width=106,height=22,layout="Layout47")
+        dlg.add_button(name="button_uncheckAll",text="Deselect All",width=106,height=22,layout="Layout47")
+        dlg.add_layout(name="Layout39",margin=[6,0,6,0],orientation=orientation.vertical,layout="group_option")
+        dlg.add_label(name="Label58",text="Output result directory:",text_halign="left",text_valign="top",layout="Layout39")
+        dlg.add_browser(name="output_dir",default=os.path.join(m_settingDir,"AcousticOut"),mode="folder",file_filter="All Files(*.*)|*.*||",layout="Layout39")
+        dlg.add_groupbox(name="group_excite",text="1_ Header File Setting",layout="acoustic_process")
+        dlg.add_layout(name="Layout40",margin=[6,0,6,0],orientation=orientation.vertical,layout="group_excite")
+        dlg.add_label(name="Label60",text="Excite directory:",text_halign="left",text_valign="top",layout="Layout40")
+        dlg.add_browser(name="excite_dir",mode="folder",file_filter="All Files(*.*)|*.*||",layout="Layout40")
+        dlg.add_label(name="Label63",text="Excite name: #Excite_File_Name.Module",text_halign="left",text_valign="top",layout="Layout40")
+        dlg.add_textbox(name="text_exciteName",layout="Layout40")
+        dlg.add_layout(name="Layout102",orientation=orientation.horizontal,layout="Layout40")
+        dlg.add_label(name="Label103",text="Recovery Frequency Range:",width=150,text_halign="left",text_valign="top",layout="Layout102")
+        dlg.add_label(name="Label104",width=30,text_halign="left",text_valign="top",layout="Layout102")
+        dlg.add_label(name="Label105",text="start.freq:",width=60,text_halign="left",text_valign="top",layout="Layout102")
+        dlg.add_textbox(name="start_freq",type="double",text="0.0",text_align="right",layout="Layout102")
+        dlg.add_label(name="Label112",text="Hz",width=15,text_halign="left",text_valign="top",layout="Layout102")        
+        dlg.add_label(name="Label107",width=60,text_halign="left",text_valign="top",layout="Layout102")
+        dlg.add_label(name="Label108",text="end.freq:",width=50,text_halign="left",text_valign="top",layout="Layout102")
+        dlg.add_textbox(name="end_freq",type="double",text="4500.0",text_align="right",layout="Layout102")
+        dlg.add_label(name="Label113",text="Hz",width=15,text_halign="left",text_valign="top",layout="Layout102")        
+        dlg.add_label(name="Label110",width=100,text_halign="left",text_valign="top",layout="Layout102")
+        dlg.add_label(name="Label111",text="Data for creating header file:",text_halign="left",text_valign="top",layout="Layout40")
+        dlg.add_table(name="table_excite",menus=["cut","copy","paste","insert row","delete row"],width=260,height=100,rows=0,columns=["#ProjectName","#HeaderFileName","#FEA_*dat_FileName","#FEA_INP4_FileName","#FEMModel_Name","#NodeSet_FileName","#BC_flag(on/off)","#BCONTACT=""","#BC_FileName","#CS_flag(on/off)","#op2/op4_FileName","#SPC_flag(on/off)","#SPC=""","#ERP_flag(on/off)","#ERP_Setting_FileName"],layout="Layout40")
+        dlg.set_table_column_data_type(name="table_excite",col=EXCITE_BCNUMBER,data_type="Integer")
+        dlg.set_table_column_data_type(name="table_excite",col=EXCITE_SPCNAME,data_type="Integer")
+        dlg.add_groupbox(name="group_uploadRecov",text="2_ Upload to Server",layout="acoustic_process")
+        dlg.add_layout(name="Layout41",margin=[6,0,6,0],orientation=orientation.vertical,layout="group_uploadRecov")
+        dlg.add_label(name="Label66",text="Server Directory:",text_halign="left",text_valign="top",layout="Layout41")
+        dlg.add_textbox(name="text_uploadHeader",layout="Layout41")
+        dlg.add_groupbox(name="group_recov",text="3_ Recovery Analysis",layout="acoustic_process")
+        dlg.add_layout(name="Layout42",margin=[6,0,6,0],orientation=orientation.horizontal,layout="group_recov")
+        dlg.add_layout(name="Layout68",orientation=orientation.vertical,layout="Layout42")
+        dlg.add_button(name="check_excite_data",text="Check Excite",width=88,height=22,layout="Layout68")
+        dlg.add_button(name="create_rev_table",text="Create Table",width=88,height=22,layout="Layout68")
+        dlg.add_table(name="table_recov",menus=["cut","copy","paste","insert row","delete row"],width=260,height=100,rows=0,columns=["#SubmitFolderDirectory","#SubmitFileName","#Solver","#Version","#Queue","#Time"],layout="Layout42")
+        dlg.set_table_column_data_type(name="table_recov",col=3,data_type="Integer")
+        dlg.set_table_column_data_type(name="table_recov",col=4,data_type="Integer")
+        dlg.add_groupbox(name="group_green",text="4_ Green Analysis",layout="acoustic_process")
+        dlg.add_layout(name="Layout43",margin=[6,0,6,0],orientation=orientation.horizontal,layout="group_green")
+        dlg.add_layout(name="Layout72",orientation=orientation.vertical,layout="Layout43")
+        dlg.add_checkbox(name="check_op2",text="Is check *op2",width=88,checked=True,lefttext=True,layout="Layout72")
+        dlg.add_button(name="create_green_table",text="Create Table",width=88,height=22,layout="Layout72")
+        dlg.add_table(name="table_green",menus=["cut","copy","paste","insert row","delete row"],width=260,height=100,rows=0,columns=["#SubmitFolderDirectory","#SubmitFileName","#AnalysisOption"],layout="Layout43")
+        dlg.add_groupbox(name="group_post",text="5_ Post Processing",layout="acoustic_process")
+        dlg.add_layout(name="Layout44",margin=[6,0,6,0],orientation=orientation.vertical,layout="group_post")
+        dlg.add_layout(name="Layout77",orientation=orientation.horizontal,layout="Layout44")
+        dlg.add_label(name="Label80",text="Result folder:",width=71,text_halign="left",text_valign="top",layout="Layout77")
+        dlg.add_browser(name="post_result_folder",mode="folder",file_filter="All Files(*.*)|*.*||",layout="Layout77")
+        dlg.add_button(name="rename",text="Check Data",width=85,height=20,layout="Layout77")
+        dlg.add_layout(name="Layout78",orientation=orientation.horizontal,layout="Layout44")
+        dlg.add_checkbox(name="check_crmodel",text="Is check *plt",width=88,checked=True,lefttext=True,layout="Layout78")
+        dlg.add_label(name="Label84",text="New model name",width=83,text_halign="right",text_valign="top",layout="Layout78")
+        dlg.add_textbox(name="text_model_name",layout="Layout78")
+        dlg.add_button(name="update_table",text="Update table",width=85,height=20,layout="Layout78")
+        dlg.add_layout(name="Layout79",orientation=orientation.horizontal,layout="Layout44")
+        dlg.add_layout(name="Layout87",orientation=orientation.vertical,layout="Layout79")
+        dlg.add_layout(name="Layout89",orientation=orientation.horizontal,layout="Layout87")
+        dlg.add_label(name="Label93",text="X min",width=35,text_halign="left",text_valign="top",layout="Layout89")
+        dlg.add_textbox(name="xmin",text="0.0",type="double",text_align="right",layout="Layout89")
+        dlg.add_layout(name="Layout90",orientation=orientation.horizontal,layout="Layout87")
+        dlg.add_label(name="Label95",text="X max",width=35,text_halign="left",text_valign="top",layout="Layout90")
+        dlg.add_textbox(name="xmax",text="3000.0",type="double",text_align="right",layout="Layout90")
+        dlg.add_layout(name="Layout91",orientation=orientation.horizontal,layout="Layout87")
+        dlg.add_label(name="Label97",text="Y min",width=35,text_halign="left",text_valign="top",layout="Layout91")
+        dlg.add_textbox(name="ymin",text="0.0",type="double",text_align="right",layout="Layout91")
+        dlg.add_layout(name="Layout92",orientation=orientation.horizontal,layout="Layout87")
+        dlg.add_label(name="Label99",text="Y max",width=35,text_halign="left",text_valign="top",layout="Layout92")
+        dlg.add_textbox(name="ymax",text="125.0",type="double",text_align="right",layout="Layout92")
+        dlg.add_table(name="table_color",width=370,height=100,rows=0,columns=["#Model name","#Curve color","#Curve style","#Load case"],layout="Layout79")
+        dlg.set_table_column_data_type(name="table_color",col=3,data_type="Integer")
+        dlg.add_layout(name="Layout5",margin=[80,2,0,2],orientation=orientation.horizontal,layout="Window")
+        dlg.add_button(name="read_log",text="Load GUI from file",width=130,height=30,layout="Layout5")
+        dlg.add_button(name="button_save_changed",text="Save GUI",width=80,height=30,layout="Layout5")
+        dlg.add_button(name="button_save_as",text="SaveAs GUI",width=80,height=30,layout="Layout5")
+        dlg.add_button(name="apply",text="Apply",width=80,height=30,layout="Layout5")
+        dlg.add_button(name="ok_m",text="Run",width=80,height=30,layout="Layout5")
+        dlg.add_button(name="cancel",text="Cancel",width=80,height=30,layout="Layout5")
+
+        dlg.add_table_right_menu(name="table_excite", menus=["Clear all","Read from file"])
+        dlg.add_table_right_menu(name="table_recov", menus=["Clear all","Read from file"])
+        dlg.add_table_right_menu(name="table_green", menus=["Clear all","Read from file"])
+
+        dlg.generate_window()
+
+        # On command
+        dlg.on_button_clicked(name="apply",callfunc=on_button_apply_clicked)
+        dlg.on_button_clicked(name="ok_m",callfunc=on_button_run_clicked_m)
+        dlg.on_button_clicked(name="cancel",callfunc=on_button_cancel_clicked)
+        dlg.on_button_clicked(name="button_checkAll",callfunc=on_button_select_clicked)
+        dlg.on_button_clicked(name="button_uncheckAll",callfunc=on_button_deselect_clicked)
+        dlg.on_button_clicked(name="button_save_changed",callfunc=on_button_save_changed)
+        dlg.on_button_clicked(name="button_save_as",callfunc=on_button_save_as)
+        dlg.on_button_clicked(name="update_table",callfunc=on_button_set_curve_color)
+        dlg.on_button_clicked(name="rename",callfunc=on_rename_button)
+        dlg.on_button_clicked(name="create_rev_table",callfunc=on_create_table_recov_button)
+        dlg.on_button_clicked(name="check_excite_data",callfunc=on_check_excite_data)
+        dlg.on_button_clicked(name="create_green_table",callfunc=on_create_table_green_button)
+        dlg.on_button_clicked(name="read_log",callfunc=on_button_load_data_clicked)
+        for i in range(0,TABLE_TOL):
+            dlg.on_table_right_menu(name=TABLE_NAME[i], callfunc=on_table_menu)
+        for i in range(0,len(CHECK_NAME_LIST)):
+            dlg.on_command(name=CHECK_NAME_LIST[i],callfunc=on_checkbox)
+        dlg.on_command(name=CHECK_ADD_MODEL,callfunc=on_checkbox_post)
+        dlg.on_command(name=TEXT_MODEL_NAME,callfunc=on_check_name)
+        dlg.on_command(name=TEXT_X_MIN,callfunc=on_check_xmin)
+        dlg.on_command(name=TEXT_Y_MIN,callfunc=on_check_ymin)
+        dlg.on_command(name=CHECK_OP2,callfunc=on_checkbox_op2)
+        dlg.on_command(name=TEXT_FTP_USER,callfunc=on_ftp_passwd)
+        dlg.on_command(name=TEXT_START_FREQ,callfunc=on_check_freq)
+        if initialize(dlg) == 0: return 0
+        return 1
+    except: return 0
+    
+if __name__=='__main__':
+    JPT.ClearLog()
+    if main() == 0: print('FAILED!')
+
+
