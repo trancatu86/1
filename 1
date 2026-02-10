@@ -1,765 +1,1068 @@
-import os
-import shutil
 import numpy as np
+from pathlib import Path
+from typing import List, Union
 from collections import namedtuple
-from threading import Timer
 import pandas as pd
-import datetime
+import sys
+import h5py
+import os
+import csv
+
+PunchRFAHeaderBlock = namedtuple("PunchHeaderBlock",
+                                 ("title", "subtitle", "label", "table_desc", "output_format", "subcase_id", "freq"))
 
 
+class FileReader:
+  def __init__(self, filepath: Union[Path, str]):
+    self._file = self._open(filepath)
+    self._filepath = filepath
+  
+  def _open(self, filepath: Union[Path, str]):
+    raise ImplementationError
+  
+  def __enter__(self):
+    return self
+  
+  def __exit__(self, exc_type, exc_val, exc_tb):
+    self._file.close()
+
+
+class PunchReader(FileReader):
+  def _open(self, filepath: Union[Path, str]):
+    return open(filepath, "r")
+
+  def _get_header_block(self, header_title: str):
+    header_block = [header_title[:-9]]
+    while True:
+      anchor = self._file.tell()
+      eof, header_line = self._read_line()
+      if eof:
+        break
+      if not header_line.startswith("$"):
+        self._file.seek(anchor)
+        break
+      header_block.append(header_line[:-9])
+    return header_block
+
+  def _parse_fra_header_block(self, header_block: List[str]):
+    title = "=".join(header_block[0].split("=")[1:]).strip()
+    subtitle = "=".join(header_block[1].split("=")[1:]).strip()
+    label = "=".join(header_block[2].split("=")[1:]).strip()
+    table_desc = header_block[3].strip()
+    output_format = header_block[4].strip()
+    subcase_id = int(header_block[5].split("=")[-1].strip())
+    freq = float(header_block[6].split("=")[-1].strip())
+    return PunchRFAHeaderBlock(title, subtitle, label, table_desc, output_format, subcase_id, freq)
+
+  def _read_line(self):
+    eof = False
+    rawline: str = self._file.readline()
+    if not len(rawline):
+      eof = True
+      rawline = ""
+    return (eof, rawline)
+
+  def _skip_to_next_header_block(self):
+    while True:
+      anchor = self._file.tell()
+      eof, rawline = self._read_line()
+      if eof: break 
+      if not rawline.startswith("$"):
+        continue
+      self._file.seek(anchor)
+      break
+    return
+
+  def parse(self):
+    """
+    data = {subcase_id: {
+                enforced_nid: int,
+                enforced_label: str,
+                node_id: {
+                    result_type['pres'|'acc']: np.ndarray
+                    }
+                }
+            }
+    """
+    header = None
+    data = {}
+    cur_freq = None
+    cur_excitation = None
+    cur_node_id = None
+    cur_subcase_id = None
+    cur_result_type = None
+    
+    while True:
+      eof, rawline = self._read_line()
+      if eof: break
+      if rawline.startswith("$"):
+        header_block = self._get_header_block(rawline)
+        if len(header_block) != 7:  # uninteresting data block
+          self._skip_to_next_header_block()
+          continue
+
+        header = self._parse_fra_header_block(header_block)
+        if header.output_format.upper() != "$REAL-IMAGINARY OUTPUT":  # uninteresting data block
+          self._skip_to_next_header_block()
+          continue
+        
+        cur_freq = header.freq
+        enforced_label = header.label[-2:].lower()
+        cur_subcase_id = header.subcase_id
+        enforced_nid = int(header.label.split("_")[-1][1:-3])
+
+        if cur_subcase_id not in data:
+          data[cur_subcase_id] = {"enforced_nid": enforced_nid, "enforced_label": enforced_label}
+        cur_result_type = "pres" if header.table_desc.upper() == "$DISPLACEMENTS" else "acc"
+        continue
+
+      line = rawline[:-9]
+      if line.startswith(" "):
+        if cur_result_type == "pres":
+          line = line.strip().replace("S", " ")
+        else:
+          line = line.strip().replace("G", " ")
+        linedata = line.split()
+        cur_node_id = int(linedata[0])
+
+        subcase_data = data[cur_subcase_id]
+        if cur_node_id not in subcase_data:
+          subcase_data[cur_node_id] = {}
+        node_data = subcase_data[cur_node_id]
+
+        if cur_result_type not in subcase_data[cur_node_id]:
+          node_data[cur_result_type] = []
+
+        insert_data = [cur_freq] + list(map(float, linedata[1:]))
+        node_data[cur_result_type].append(insert_data)
+        continue
+
+      if line.startswith("-"):
+        line = line[6:].strip()
+        insert_data = list(map(float, line.split()))
+        node_data = data[cur_subcase_id][cur_node_id]
+        node_data[cur_result_type][-1].extend(insert_data)
+        continue
+
+    # combine data
+    for subcase_data in data.values():
+      enforced_nid = subcase_data["enforced_nid"]
+      for node_id, node_response in subcase_data.items():
+        if node_id == "enforced_nid" or node_id == "enforced_label":
+          continue
+        for result_type in node_response.keys():
+          response_array = np.array(node_response[result_type])
+          if not response_array.size:
+            node_response[result_type] = response_array
+          else:
+            response_array = response_array[:, [0,
+                                                1, 7, 2, 8,
+                                                3, 9, 4, 10,
+                                                5, 11, 6, 12]]
+            complex_response = response_array[:, 1::2] + 1.j * response_array[:, 2::2]
+            mag = np.abs(complex_response)
+            phase = np.angle(complex_response, True)
+            response_array = np.concatenate([response_array, mag, phase], axis=-1)
+            response_array = response_array[:, [0,
+                                                1, 2, 13, 19,
+                                                3, 4, 14, 20,
+                                                5, 6, 15, 21,
+                                                7, 8, 16, 22,
+                                                9, 10, 17, 23,
+                                                11, 12, 18, 24]]
+            if result_type == "pres":
+              node_response[result_type] = response_array[:, :5]
+            else:
+              node_response[result_type] = response_array
+
+    for subcase_id, subcase_data in data.items():
+      data_collated = []
+      column_names = ["freq"]
+      enforced_nid = subcase_data["enforced_nid"]
+      enforced_label = subcase_data["enforced_label"]
+      for idx, (node_id, node_response) in enumerate(subcase_data.items()):
+        if node_id == "enforced_nid" or node_id == "enforced_label":
+          continue
+        for result_type, response_data in node_response.items():
+          if response_data.size:
+            data_collated.append(response_data[:, int(len(data_collated) > 0):])
+            if result_type == "pres":
+              column_names.extend([u + c for u in [f"{node_id}.px"]
+                                   for c in [".R", ".I", ".Mag", ".Phase"]
+                                   ])
+            else:
+              column_names.extend([u + c
+                                   for u in [f"{node_id}.ax", f"{node_id}.ay", f"{node_id}.az", f"{node_id}.rx", f"{node_id}.ry", f"{node_id}.rz"]
+                                   for c in [".R", ".I", ".Mag", ".Phase"]
+                                   ])
+
+      data_collated = np.concatenate(data_collated, axis=-1)
+      data[subcase_id] = {"enforced_nid": enforced_nid,
+                          "enforced_label": enforced_label,
+                          "response": pd.DataFrame(data_collated, columns=column_names)}
+    return data
+
+
+def cast_to_structured_array(df: pd.DataFrame):    
+  dtype = np.dtype([(colname, df[colname].dtype) for colname in df.columns])    
+  return np.core.records.fromarrays(df.to_numpy().transpose(), dtype=dtype)
 current_path = os.getcwd()
 
-def delete_file_in_folder(base_dir):
-    if os.path.isdir(base_dir):
-        # Duyệt tất cả file và thư mục con trong folder_path
-        for item in os.listdir(base_dir):
-            item_path = os.path.join(base_dir, item)
-            try:
-                if os.path.isfile(item_path) or os.path.islink(item_path):
-                    os.remove(item_path)  # Xóa file hoặc link
-                elif os.path.isdir(item_path):
-                    shutil.rmtree(item_path)  # Xóa thư mục và toàn bộ nội dung bên trong
-            except Exception as e:
-                print(f"Failed to delete {item_path}. Reason: {e}")
+def build_database_punch(save_to, num_mounts, model_name, eng_pch, body_pch, avl_files,
+                   mount_params, node_ids, response_ids, engine_angles, remarks,
+                   mount_param_type='kelvin-voigt'):
+  dname = "/NODE_IDS"
+  with h5py.File(save_to, "w") as df:
+    df.attrs["num_mounts"] = num_mounts
+    df.attrs["mount_param_type"] = mount_param_type
+    df.attrs["model_name"] = model_name
+    df.attrs["eng_pch"] = os.path.basename(eng_pch)
+    df.attrs["body_pch"] = os.path.basename(body_pch)
+    df.attrs["remarks"] = remarks
+    df.attrs["engine_angles"] = engine_angles
+    dtype = np.dtype( [("eng_nids", "i8"), ("body_nids", "i8"), ("avl_nids", "i8")] )
+    dset = df.create_dataset(dname, data=np.core.records.fromarrays(node_ids, dtype=dtype))
 
+    engine_response_nids = set()
+    with PunchReader(eng_pch) as f:
+      eng_data = f.parse()
+      eng_nids = node_ids[0, :].tolist()
+      for subcase_id, subcase_data in eng_data.items():
+        enforced_nid = subcase_data["enforced_nid"]
+        enforced_label = subcase_data["enforced_label"]
+        if enforced_nid in eng_nids:
+          dname = f"/EngMount/N{enforced_nid}/{enforced_label.upper()}"
+          dset = df.create_dataset(dname, data=cast_to_structured_array(subcase_data["response"]))
+          response_nids = [int(name.split(".")[0]) for name in subcase_data['response'].columns if not name.startswith("freq")]
+          engine_response_nids |= set(response_nids)
 
-def delete_folder_file(base_dir):
-    # Lặp qua từng thư mục con trong base_dir
-    for folder_name in os.listdir(base_dir):
-        folder_path = os.path.join(base_dir, folder_name)
-        if os.path.isdir(folder_path):
-            # Duyệt tất cả file và thư mục con trong folder_path
-            for item in os.listdir(folder_path):
-                item_path = os.path.join(folder_path, item)
-                try:
-                    if os.path.isfile(item_path) or os.path.islink(item_path):
-                        os.remove(item_path)  # Xóa file hoặc link
-                    elif os.path.isdir(item_path):
-                        shutil.rmtree(item_path)  # Xóa thư mục và toàn bộ nội dung bên trong
-                except Exception as e:
-                    print(f"Failed to delete {item_path}. Reason: {e}")
+    body_response_nids = set()
+    with PunchReader(body_pch) as f:
+      body_data = f.parse()
+      body_nids = node_ids[1, :].tolist()
+      for subcase_id, subcase_data in body_data.items():
+        enforced_nid = subcase_data["enforced_nid"]
+        enforced_label = subcase_data["enforced_label"]
+        if enforced_nid in body_nids:
+          dname = f"/BodyMount/N{enforced_nid}/{enforced_label.upper()}"
+          dset = df.create_dataset(dname, data=cast_to_structured_array(subcase_data["response"]))
+          for name in subcase_data["response"].columns:
+            if name == "freq":
+              continue
+            nid, lbl, *_ = name.split(".")
+            if lbl != "px":
+              body_response_nids.add(int(nid))
 
-def convert_csv_BodyBlockedForce(file_list):
-    
-    parts =[]
-    # Danh sách tên file CSV
-    """
-    file_list = ['BodyMount_N1000_FX_FY_FZ_MX_MY_MZ.csv', 'BodyMount_N1001_FX_FY_FZ_MX_MY_MZ.csv',
-                    'BodyMount_N1002_FX_FY_FZ_MX_MY_MZ.csv', 'BodyMount_N1003_FX_FY_FZ_MX_MY_MZ.csv',
-                    'BodyMount_N1004_FX_FY_FZ_MX_MY_MZ.csv']
-    """
-    # Lấy đường dẫn hiện tại
-    current_path = os.getcwd()  
+    response_ids_set = set(response_ids)
+    df.attrs['response_id'] = list(response_ids_set.difference(engine_response_nids, body_response_nids))  # the name `response_id` is for backward-compatible
+    df.attrs['response_id_eng'] = list(response_ids_set & engine_response_nids)
+    df.attrs['response_id_body'] = list(response_ids_set & body_response_nids)
 
-    body_response_nids = []
-    body_microphone_response_nids = []
-    microphone_response_nids = [] 
+    nast_freq = next(iter(eng_data.values()))["response"]["freq"].to_numpy()
+    avldata = {}
+    column_names = {}
+    axis_labels = ("ax", "ay", "az", "rx", "ry", "rz")
+    avl_nids = node_ids[2, :].tolist()
+    for fpath in avl_files:
+      fname = os.path.splitext(os.path.basename(fpath))[0]
+      name_components = fname.split("_")
+      axis = axis_labels[int(name_components[-2][-1]) - 1]
+      rpm = int(name_components[-1].strip("rpm"))
+      mount_nid = int(name_components[-4])
+      if mount_nid not in avl_nids:
+        continue
 
-    with open(file_list[0], 'r', encoding='utf-8') as f:
-      column_line = f.readline().strip()
-    column = column_line.split(',')
-        
-        
-    for k in range(1,int(len(column))):     
-      
-        nid = column[k].split(".")[0]
-        wrench = column[k].split(".")[1]
-        lbl = column[k].split(".")[2]
-        MagPhase = column[k].split(".")[3]
-        if wrench =="FX" and lbl == "ax" and MagPhase=="Mag":
-            body_response_nids.append(int(nid))
-        if wrench =="FX" and lbl == "px" and MagPhase=="Mag":            
-            microphone_response_nids.append(int(nid)) 
+      if rpm not in avldata:
+        avldata[rpm] = []
+        column_names[rpm] = []
 
-    rpm=0  
+      data = pd.read_csv(fpath, skiprows=[1]).to_numpy()
+      avl_freq = data[:, 0]
+      mag = data[:, 1]
+      phase = np.radians(data[:, 2])
+      # interp_data = np.interp(nast_freq, avl_freq, mag * np.cos(phase) + 1.j * mag * np.sin(phase) )
+      avl_resp = mag * np.cos(phase) + 1.j * mag * np.sin(phase)
+      new_colnames = [f"{mount_nid}.{axis}.{comp}" for comp in ("R", "I", "Mag", "Phase")]
+
+      if len(avldata[rpm]):
+        # avldata[rpm].extend([interp_data.real, interp_data.imag, np.abs(interp_data), np.angle(interp_data, True)])
+        avldata[rpm].extend([avl_resp.real, avl_resp.imag, np.abs(avl_resp), np.angle(avl_resp, True)])
+        column_names[rpm].extend(new_colnames)
+      else:
+        # avldata[rpm].append([nast_freq, interp_data.real, interp_data.imag, np.abs(interp_data), np.angle(interp_data, True)])
+        avldata[rpm].append([avl_freq, avl_resp.real, avl_resp.imag, np.abs(avl_resp), np.angle(avl_resp, True)])
+        column_names[rpm].extend(["freq"] + new_colnames)
+
+    for rpm, data in avldata.items():
+      dname = f"/AVLMount/{rpm}RPM"
+      collated_data = pd.DataFrame(np.vstack(data).T, columns=column_names[rpm])
+      dset = df.create_dataset(dname, data=cast_to_structured_array(collated_data))
+
+    if mount_param_type == 'kelvin-voigt':
+      dname = f"/MOUNT_PARAMS"
+      column_names = []
+      params = []
+      for mount_nid, mount_elems in mount_params.items():
+        for elname, eldata in mount_elems.items():
+          column_names.extend([f"{mount_nid}.{elname}.{elcomp}" for elcomp in eldata.keys()])
+          params.extend( list(eldata.values()) )
+      dtype = np.dtype([(colname, "f8") for colname in column_names])
+      params = np.array([tuple(params)], dtype=dtype)
+      dset = df.create_dataset( dname, data=params )
+    else:
+      # tabular dynamic stiffness
+      column_names = ["freq", "real", "imag"]
+      for mount_nid, mount_input_data in mount_params.items():
+        group_name = f"/MountParams/n{mount_nid}"
+        group  = df.create_group(group_name)
+        if mount_input_data["mountType"] == "Rigid":
+          group.attrs["mount_type"] = "rigid"
+          group.attrs["matrix_type"] = "none"
+          continue
+
+        group.attrs["mount_type"] = "flexible"
+        group.attrs["matrix_type"] = mount_input_data["matrixType"]
+        group.attrs["fixed_in_excite"] = mount_input_data["fixedInExcite"]
+        stiffness_data = mount_input_data["dynStiffness"]
+        for axis_label in stiffness_data:
+          dname = f"{group_name}/{axis_label.upper()}"
+          dyn_stiff_table = np.array(stiffness_data[axis_label])
+          mount_data = pd.DataFrame(data=dyn_stiff_table, columns=column_names)
+          dset = df.create_dataset( dname, data=cast_to_structured_array(mount_data) )
+  return
+
+def build_database_csv(save_to, num_mounts, model_name, eng_pch, body_csv, avl_files,
+                   mount_params, node_ids, response_ids, engine_angles, remarks,
+                   mount_param_type='kelvin-voigt'):
+  dname = "/NODE_IDS"
+  with h5py.File(save_to, "w") as df:
+    df.attrs["num_mounts"] = num_mounts
+    df.attrs["mount_param_type"] = mount_param_type
+    df.attrs["model_name"] = model_name
+    df.attrs["eng_pch"] = os.path.basename(eng_pch)
+    df.attrs["body_csv"] = ""
+    df.attrs["remarks"] = remarks
+    df.attrs["engine_angles"] = engine_angles
+    dtype = np.dtype( [("eng_nids", "i8"), ("body_nids", "i8"), ("avl_nids", "i8")] )
+    dset = df.create_dataset(dname, data=np.core.records.fromarrays(node_ids, dtype=dtype))
+
+    engine_response_nids = set()
+    with PunchReader(eng_pch) as f:
+      eng_data = f.parse()
+      eng_nids = node_ids[0, :].tolist()
+      for subcase_id, subcase_data in eng_data.items():
+        enforced_nid = subcase_data["enforced_nid"]
+        enforced_label = subcase_data["enforced_label"]
+        if enforced_nid in eng_nids:
+          dname = f"/EngMount/N{enforced_nid}/{enforced_label.upper()}"
+          dset = df.create_dataset(dname, data=cast_to_structured_array(subcase_data["response"]))
+          response_nids = [int(name.split(".")[0]) for name in subcase_data['response'].columns if not name.startswith("freq")]
+          engine_response_nids |= set(response_nids)
+
+#############
+
+    body_response_nids = set()
+    body_microphone_response_nids = set()
+    microphone_response_nids = set()    
+    nast_freq = next(iter(eng_data.values()))["response"]["freq"].to_numpy()
     bodydata = {}
-    bodydata_body = {}
-    column_names = {}
-    column_names_body = {}       
-
-    for file_name in file_list:   
-        base_name = os.path.splitext(os.path.basename(file_name))[0]  # 'BodyMount_N1000_FX_FY_FZ_MX_MY_MZ'        
-        parts = base_name .split("_")  # tách chuỗi thành danh sách các phần tử  
-
-        FX = parts[1]  + "_"+ parts[2] + ".csv"
-        FY = parts[1]  + "_"+ parts[3] + ".csv"
-        FZ = parts[1]  + "_"+ parts[4] + ".csv"
-        MX = parts[1]  + "_"+ parts[5] + ".csv"
-        MY = parts[1]  + "_"+ parts[6] + ".csv"
-        MZ = parts[1]  + "_"+ parts[7] + ".csv"
-        t=0
-        for wrench in [FX,FY,FZ,MX,MY,MZ]:
-            k=0    
-            data = pd.read_csv(file_name).to_numpy()   
-            rpm = 0        
-            bodydata[rpm] = []
-            column_names[rpm] = []  
-            for item_microphone_response in microphone_response_nids:
-                body_freq = data[:, 0]
-                body_resp_3 = data[:, 12*k+1+2*t]
-                body_resp_4 = data[:, 12*k+2+2*t]
-                body_resp = body_resp_3 * np.cos(np.radians(body_resp_4)) + 1.j * body_resp_3 * np.sin(np.radians(body_resp_4))
-                body_resp_1 = body_resp.real
-                body_resp_2 = body_resp.imag        
-                k=k+1
-                axis = "px"
-                new_colnames_1 = [f"{item_microphone_response}.{axis}.{comp}" for comp in ("R", "I")]
-                
-                if len(bodydata[rpm]):
-                    bodydata[rpm].extend([body_resp_1, body_resp_2])
-                    column_names[rpm].extend(new_colnames_1)
-                else:
-                    bodydata[rpm].append([body_freq,body_resp_1,body_resp_2])
-                    column_names[rpm].extend(["freq"] + new_colnames_1)
-  
-            line= 12*k
-            bodydata_body[rpm] = []
-            column_names_body[rpm] = []    
-            k=0            
-            for item_body_response in body_response_nids:  
-                new_colnames_2= [u + c
-                                   for u in [f"{item_body_response}.ax", f"{item_body_response}.ay", f"{item_body_response}.az", f"{item_body_response}.rx", f"{item_body_response}.ry", f"{item_body_response}.rz"]
-                                   for c in [".R", ".I"]
-                                   ]   
-                 
-                column_names_body[rpm].extend(new_colnames_2)                
-                for i in range(0, 6):
-                    body_freq = data[:, 0]
-                    body_resp_3 = data[:, line+12*k+1+2*t]
-                    body_resp_4 = data[:, line+12*k+2+2*t]
-                    
-                    body_resp = body_resp_3 * np.cos(np.radians(body_resp_4)) + 1.j * body_resp_3 * np.sin(np.radians(body_resp_4))
-                    body_resp_1 = body_resp.real
-                    body_resp_2 = body_resp.imag  
-                    k=k+1                    
-                    bodydata_body[rpm].extend([body_resp_1, body_resp_2])
-                    
-            bodydata[rpm].extend(bodydata_body[rpm]) 
-            column_names[rpm].extend(column_names_body[rpm])            
-            for rpm, data in bodydata.items():
-                collated_data = pd.DataFrame(np.vstack(data).T, columns=column_names[rpm])
-                
-            csv_file_path = current_path + "\\BlockedForce\\bf_body_blocked_force_csv_temp\\" +  wrench
-
-            collated_data.to_csv(csv_file_path, index=False)
-            t=t+1
-
-def convert_csv_ReactionForce(file_list):
-    
-    parts =[]
-    # Danh sách tên file CSV
-    """
-    file_list = ['ReactionForce_80001_FX_FY_FZ_MX_MY_MZ.csv', 'ReactionForce_80002_FX_FY_FZ_MX_MY_MZ.csv',
-                    'ReactionForce_80003_FX_FY_FZ_MX_MY_MZ.csv']
-    FX.Mag	FX.Phase	FY.Mag	FY.Phase	FZ.Mag	FZ.Phase	MX.Mag	MX.Phase	MY.Mag	MY.Phase	MZ.Mag	MZ.Phase
-
-    """
-    # Lấy đường dẫn hiện tại
-    current_path = os.getcwd()  
-
-    body_response_nids = []
-    body_microphone_response_nids = []
-    microphone_response_nids = [] 
-
-    with open(file_list[0], 'r', encoding='utf-8') as f:
+    column_names = {}   
+    with open(body_csv[0], 'r') as f:
       column_line = f.readline().strip()
     column = column_line.split(',')
+#    print("len(column)")    
+#    print(len(column))
+    loop_number=(len(column)-1)/4
+#    print("loop_number")    
+#    print(loop_number)    
+    for name in column:          
+      if name == "freq":
+        continue
+      nid, lbl, MagPhase = name.split(".")
+      if lbl == "ax" and MagPhase=="Mag":
+        body_response_nids.add(int(nid))
+      if lbl == "px" and MagPhase=="Mag":
+        microphone_response_nids.add(int(nid)) 
+          
+#    print("body_response_nids_database_builder")
+#    print(body_response_nids) 
+#    print("microphone_response_nids_database_builder")
+#    print(microphone_response_nids)   
+    rpm=0    
+  
+    for fpath in body_csv:
+      fname = os.path.splitext(os.path.basename(fpath))[0]
+      name_components = fname.split("_")
+      body_nids = node_ids[1, :].tolist()  # ボディノードIDリスト
+      enforced_nid = name_components[1][1:]
+      enforced_label = name_components[-1]
+      data = pd.read_csv(fpath).to_numpy()
+
+      bodydata[rpm] = []
+      column_names[rpm] = []  
+      for k in range(0,int(loop_number)):
+        body_freq = data[:, 0]
+        body_resp_1 = data[:, 4*k+1]
+        body_resp_2 = data[:, 4*k+2]
+        body_resp_3 = data[:, 4*k+3]
+        body_resp_4 = data[:, 4*k+4] 
+#        print("body_resp_1 k")  
+#        print(fname)
+#        print(k)    
+#        print(data[2, 4*k+1])
+        new_colnames = [column[4*k+1],column[4*k+2],column[4*k+3],column[4*k+4]]
+        if len(bodydata[rpm]):
+          bodydata[rpm].extend([body_resp_1, body_resp_2,body_resp_3, body_resp_4])
+          column_names[rpm].extend(new_colnames)
+        else:
+          bodydata[rpm].append([body_freq,body_resp_1,body_resp_2,body_resp_3, body_resp_4])
+          column_names[rpm].extend(["freq"] + new_colnames)
+          
+      for rpm, data in bodydata.items():
+        dname = f"/BodyMount/N{enforced_nid}/{enforced_label.upper()}"
+        collated_data = pd.DataFrame(np.vstack(data).T, columns=column_names[rpm])      
+        dset = df.create_dataset(dname, data=cast_to_structured_array(collated_data))        
         
-    rpm=0  
-    bodydata_rf = {}
-    bodydata_body = {}
+    response_ids_set = set(response_ids)
+    df.attrs['response_id'] = list(response_ids_set.difference(engine_response_nids, body_response_nids))  # エンジン・ボディ以外
+    df.attrs['response_id_eng'] = list(response_ids_set & engine_response_nids)  # エンジン関連
+    df.attrs['response_id_body'] = list(response_ids_set & body_response_nids)  # ボディ関連
+
+
+###########
+
+    nast_freq = next(iter(eng_data.values()))["response"]["freq"].to_numpy()
+    avldata = {}
     column_names = {}
-    column_names_body = {}       
+    axis_labels = ("ax", "ay", "az", "rx", "ry", "rz")
+    avl_nids = node_ids[2, :].tolist()
+    for fpath in avl_files:
+      fname = os.path.splitext(os.path.basename(fpath))[0]
+      name_components = fname.split("_")
+      axis = axis_labels[int(name_components[-2][-1]) - 1]
+      rpm = int(name_components[-1].strip("rpm"))
+      mount_nid = int(name_components[-4])
+      if mount_nid not in avl_nids:
+        continue
 
-    for file_name in file_list:   
-        base_name = os.path.splitext(os.path.basename(file_name))[0]  # 'BodyMount_N1000_FX_FY_FZ_MX_MY_MZ'        
-        parts = base_name .split("_")  # tách chuỗi thành danh sách các phần tử  
-        FX = parts[1]  + "_"+ parts[2] + ".csv"
-        FY = parts[1]  + "_"+ parts[3] + ".csv"
-        FZ = parts[1]  + "_"+ parts[4] + ".csv"
-        MX = parts[1]  + "_"+ parts[5] + ".csv"
-        MY = parts[1]  + "_"+ parts[6] + ".csv"
-        MZ = parts[1]  + "_"+ parts[7] + ".csv"
-        t=0
-        data = pd.read_csv(file_name).to_numpy()        
-        for wrench in [FX,FY,FZ,MX,MY,MZ]:  
-            freq = data[:, 0]  # cột tần số
-            mag = data[:, 1 + 2 * t]  # cột magnitude
-            phase = data[:, 2 + 2 * t]  # cột phase (đơn vị độ)          
-            # Tính số phức
-            complex_val = mag * np.cos(np.radians(phase)) + 1j * mag * np.sin(np.radians(phase))
-            # Tạo dataframe với 2 cột freq và complex
-            df_out = pd.DataFrame({
-                "freq": freq,
-                "complex": complex_val
-            })
-            # Đường dẫn lưu file CSV
-            csv_file_path = current_path + "\\BlockedForce\\bf_reactionforce\\" +  wrench
-            # Lưu file CSV
-            df_out.to_csv(csv_file_path, index=False)
-            t=t+1
+      if rpm not in avldata:
+        avldata[rpm] = []
+        column_names[rpm] = []
 
-def convert_complex(folder_path, output_folder):
-    # Tạo thư mục output nếu chưa tồn tại
-    os.makedirs(output_folder, exist_ok=True)
+      data = pd.read_csv(fpath, skiprows=[1]).to_numpy()
+      avl_freq = data[:, 0]
+      mag = data[:, 1]
+      phase = np.radians(data[:, 2])
+      # interp_data = np.interp(nast_freq, avl_freq, mag * np.cos(phase) + 1.j * mag * np.sin(phase) )
+      avl_resp = mag * np.cos(phase) + 1.j * mag * np.sin(phase)
+      new_colnames = [f"{mount_nid}.{axis}.{comp}" for comp in ("R", "I", "Mag", "Phase")]
 
-    # Duyệt tất cả file trong thư mục
+      if len(avldata[rpm]):
+        # avldata[rpm].extend([interp_data.real, interp_data.imag, np.abs(interp_data), np.angle(interp_data, True)])
+        avldata[rpm].extend([avl_resp.real, avl_resp.imag, np.abs(avl_resp), np.angle(avl_resp, True)])
+        column_names[rpm].extend(new_colnames)
+      else:
+        # avldata[rpm].append([nast_freq, interp_data.real, interp_data.imag, np.abs(interp_data), np.angle(interp_data, True)])
+        avldata[rpm].append([avl_freq, avl_resp.real, avl_resp.imag, np.abs(avl_resp), np.angle(avl_resp, True)])
+        column_names[rpm].extend(["freq"] + new_colnames)
+
+    for rpm, data in avldata.items():
+      dname = f"/AVLMount/{rpm}RPM"
+      collated_data = pd.DataFrame(np.vstack(data).T, columns=column_names[rpm])
+      dset = df.create_dataset(dname, data=cast_to_structured_array(collated_data))
+
+    if mount_param_type == 'kelvin-voigt':
+      dname = f"/MOUNT_PARAMS"
+      column_names = []
+      params = []
+      for mount_nid, mount_elems in mount_params.items():
+        for elname, eldata in mount_elems.items():
+          column_names.extend([f"{mount_nid}.{elname}.{elcomp}" for elcomp in eldata.keys()])
+          params.extend( list(eldata.values()) )
+      dtype = np.dtype([(colname, "f8") for colname in column_names])
+      params = np.array([tuple(params)], dtype=dtype)
+      dset = df.create_dataset( dname, data=params )
+    else:
+      # tabular dynamic stiffness
+      column_names = ["freq", "real", "imag"]
+      for mount_nid, mount_input_data in mount_params.items():
+        group_name = f"/MountParams/n{mount_nid}"
+        group  = df.create_group(group_name)
+        if mount_input_data["mountType"] == "Rigid":
+          group.attrs["mount_type"] = "rigid"
+          group.attrs["matrix_type"] = "none"
+          continue
+
+        group.attrs["mount_type"] = "flexible"
+        group.attrs["matrix_type"] = mount_input_data["matrixType"]
+        group.attrs["fixed_in_excite"] = mount_input_data["fixedInExcite"]
+        stiffness_data = mount_input_data["dynStiffness"]
+        for axis_label in stiffness_data:
+          dname = f"{group_name}/{axis_label.upper()}"
+          dyn_stiff_table = np.array(stiffness_data[axis_label])
+          mount_data = pd.DataFrame(data=dyn_stiff_table, columns=column_names)
+          dset = df.create_dataset( dname, data=cast_to_structured_array(mount_data) )
+  return
+  
+#############################################################
+def build_database_punch_BlockedForce_acoustic(save_to, body_pch, node_ids, response_ids):
+  print("build_database_punch_BlockedForce_acoustic") 
+  dname = "/NODE_IDS"
+  h5_path= current_path + "\\db\\database.h5"  
+  with h5py.File(save_to, "w") as df:
+    dtype = np.dtype( [("body_nids", "i8")] )
+    dset = df.create_dataset(dname, data=np.core.records.fromarrays(node_ids, dtype=dtype))
+
+    body_response_nids = set()
+    with PunchReader(body_pch) as f:
+      body_data = f.parse()
+      body_nids = node_ids[0, :].tolist()
+      for subcase_id, subcase_data in body_data.items():
+        enforced_nid = subcase_data["enforced_nid"]
+#        print("enforced_nid") 
+#        print(enforced_nid)        
+        enforced_label = subcase_data["enforced_label"]
+#        print("enforced_label")        
+#        print(enforced_label)       
+        
+        if enforced_nid in body_nids:
+          dname = f"/BodyMount/N{enforced_nid}/{enforced_label.upper()}"     
+          
+          dset = df.create_dataset(dname, data=cast_to_structured_array(subcase_data["response"]))
+          for name in subcase_data["response"].columns:
+            if name == "freq":
+              continue
+            nid, lbl, *_ = name.split(".")
+            if lbl != "px":
+              body_response_nids.add(int(nid))
+  print("response_ids")
+  print(response_ids) 
+  response_ids_str = [str(i) for i in response_ids]  
+  
+
+  output_csv = current_path + "\\BlockedForce\\bf_body_blocked_force_punch"
+      
+  export_all_datasets(h5_path, output_csv)  
+
+  convert_complex_acoustic_only(response_ids_str,output_csv)
+  os.remove(h5_path)  
+  return  
+  
+
+#############################################################
+def build_database_punch_BlockedForce(save_to, body_pch, node_ids, response_ids, body_responseId_nids):
+  print("build_database_punch_BlockedForce")     
+  dname = "/NODE_IDS"
+  with h5py.File(save_to, "w") as df:
+    dtype = np.dtype( [("body_nids", "i8")] )
+    dset = df.create_dataset(dname, data=np.core.records.fromarrays(node_ids, dtype=dtype))
+
+    body_response_nids = set()
+    with PunchReader(body_pch) as f:
+      body_data = f.parse()
+      body_nids = node_ids[0, :].tolist()
+      for subcase_id, subcase_data in body_data.items():
+        enforced_nid = subcase_data["enforced_nid"]
+#        print("enforced_nid") 
+#        print(enforced_nid)        
+        enforced_label = subcase_data["enforced_label"]
+#        print("enforced_label")        
+#        print(enforced_label)       
+        
+        if enforced_nid in body_nids:
+          dname = f"/BodyMount/N{enforced_nid}/{enforced_label.upper()}"     
+          
+          dset = df.create_dataset(dname, data=cast_to_structured_array(subcase_data["response"]))
+          for name in subcase_data["response"].columns:
+            if name == "freq":
+              continue
+            nid, lbl, *_ = name.split(".")
+            if lbl != "px":
+              body_response_nids.add(int(nid))
+  print("response_ids")
+  print(response_ids) 
+  response_ids_str = [str(i) for i in response_ids] 
+  if body_responseId_nids!="":  
+      body_response_ids_str = [str(i) for i in body_responseId_nids]   
+    #  response_ids_str.extend(body_response_ids_str)
+      h5_path= current_path + "\\db\\database.h5"
+      output_csv = current_path + "\\BlockedForce\\bf_body_blocked_force_punch"
+      export_all_datasets(h5_path, output_csv)  
+
+      convert_complex(response_ids_str,output_csv)
+      convert_complex_structure_ax(body_responseId_nids,output_csv) 
+      convert_complex(response_ids_str,output_csv)
+      convert_complex_structure_ay(body_responseId_nids,output_csv) 
+      convert_complex(response_ids_str,output_csv)
+      convert_complex_structure_az(body_responseId_nids,output_csv) 
+  
+      os.remove(h5_path)  
+  return  
+#############################################################
+def build_database_punch_BlockedForce_body(save_to, body_pch, node_ids, body_responseId_nids):
+  print("build_database_punch_BlockedForce_body")    
+  dname = "/NODE_IDS"
+  with h5py.File(save_to, "w") as df:
+    dtype = np.dtype( [("body_nids", "i8")] )
+    dset = df.create_dataset(dname, data=np.core.records.fromarrays(node_ids, dtype=dtype))
+    body_response_nids = set()
+    with PunchReader(body_pch) as f:
+      body_data = f.parse()
+      body_nids = node_ids[0, :].tolist()
+      for subcase_id, subcase_data in body_data.items():
+        enforced_nid = subcase_data["enforced_nid"]
+#        print("enforced_nid") 
+#        print(enforced_nid)        
+        enforced_label = subcase_data["enforced_label"]
+#        print("enforced_label")        
+#        print(enforced_label)       
+        
+        if enforced_nid in body_nids:
+          dname = f"/BodyMount/N{enforced_nid}/{enforced_label.upper()}"     
+          dset = df.create_dataset(dname, data=cast_to_structured_array(subcase_data["response"]))
+          for name in subcase_data["response"].columns:
+            if name == "freq":
+              continue
+            nid, lbl, *_ = name.split(".")
+            if lbl != "px":
+              body_response_nids.add(int(nid))
+
+  if body_responseId_nids!="":  
+      body_response_ids_str = [str(i) for i in body_responseId_nids]   
+    #  response_ids_str.extend(body_response_ids_str)
+      h5_path= current_path + "\\db\\database.h5"
+      output_csv = current_path + "\\BlockedForce\\bf_body_blocked_force_punch"
+      export_all_datasets(h5_path, output_csv)  
+      convert_complex_structure_ax(body_responseId_nids,output_csv) 
+      convert_complex_structure_ay(body_responseId_nids,output_csv) 
+      convert_complex_structure_az(body_responseId_nids,output_csv) 
+  
+      os.remove(h5_path)  
+  return
+  
+def combine_complex_columns(df, prefix):
+    real_col = f"{prefix}.px.R"
+    imag_col = f"{prefix}.px.I"
+    complex_col_name = prefix  # Tên cột số phức mới
+
+    if real_col in df.columns and imag_col in df.columns:
+        df[complex_col_name] = df[real_col] + 1j * df[imag_col]
+        df.drop(columns=[real_col, imag_col], inplace=True)
+    return df
+
+def convert_complex(response_ids, input_folder):
+    for filename in os.listdir(input_folder):
+        if filename.endswith('.csv'):
+            file_path = os.path.join(input_folder, filename)
+            df = pd.read_csv(file_path)
+
+            # Lọc cột giữ lại: cột 'freq' và các cột bắt đầu bằng phần tử trong response_ids
+            cols_to_keep = ['freq']
+            for prefix in response_ids:
+                cols_to_keep += [col for col in df.columns if col.startswith(prefix + ".")]
+
+            df_filtered = df[cols_to_keep].copy()
+
+            # Ghép các cột R và I thành số phức
+            for prefix in response_ids:
+                df_filtered = combine_complex_columns(df_filtered, prefix)
+
+            # Chỉ giữ lại cột freq và các cột số phức mới (tên là prefix)
+            cols_final = ['freq'] + response_ids
+            df_final = df_filtered[cols_final]
+
+            # Lưu file kết quả
+            output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_acoustic"
+            os.makedirs(output_folder, exist_ok=True)
+            output_path = os.path.join(output_folder, filename)
+            df_final.to_csv(output_path, index=False)
+            
+def convert_complex_acoustic_only(response_ids, input_folder):
+    for filename in os.listdir(input_folder):
+        if filename.endswith('.csv'):
+            file_path = os.path.join(input_folder, filename)
+            df = pd.read_csv(file_path)
+
+            # Lọc cột giữ lại: cột 'freq' và các cột bắt đầu bằng phần tử trong response_ids
+            cols_to_keep = ['freq']
+            for prefix in response_ids:
+                cols_to_keep += [col for col in df.columns if col.startswith(prefix + ".")]
+
+            df_filtered = df[cols_to_keep].copy()
+
+            # Ghép các cột R và I thành số phức
+            for prefix in response_ids:
+                df_filtered = combine_complex_columns(df_filtered, prefix)
+
+            # Chỉ giữ lại cột freq và các cột số phức mới (tên là prefix)
+            cols_final = ['freq'] + response_ids
+            df_final = df_filtered[cols_final]
+
+            # Lưu file kết quả
+            output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex"
+            os.makedirs(output_folder, exist_ok=True)
+            output_path = os.path.join(output_folder, filename)
+            df_final.to_csv(output_path, index=False)
+            
+def combine_complex_columns_structure_ax(df, prefix):
+    real_col = f"{prefix}.ax.R"
+    imag_col = f"{prefix}.ax.I"
+    complex_col_name = prefix  # Tên cột số phức mới
+    if real_col in df.columns and imag_col in df.columns:
+        df[complex_col_name] = df[real_col] + 1j * df[imag_col]
+        df.drop(columns=[real_col, imag_col], inplace=True)
+    return df
+def combine_complex_columns_structure_ay(df, prefix):
+    real_col = f"{prefix}.ay.R"
+    imag_col = f"{prefix}.ay.I"
+    complex_col_name = prefix  # Tên cột số phức mới
+    if real_col in df.columns and imag_col in df.columns:
+        df[complex_col_name] = df[real_col] + 1j * df[imag_col]
+        df.drop(columns=[real_col, imag_col], inplace=True)
+    return df
+def combine_complex_columns_structure_az(df, prefix):
+    real_col = f"{prefix}.az.R"
+    imag_col = f"{prefix}.az.I"
+    complex_col_name = prefix  # Tên cột số phức mới
+    if real_col in df.columns and imag_col in df.columns:
+        df[complex_col_name] = df[real_col] + 1j * df[imag_col]
+        df.drop(columns=[real_col, imag_col], inplace=True)
+    return df
+    
+    
+def convert_complex_structure_ax(response_ids, input_folder):
+    output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ax"     
+    for filename in os.listdir(input_folder):
+        if filename.endswith('.csv'):
+            file_path = os.path.join(input_folder, filename)
+            df = pd.read_csv(file_path)
+            # Lọc cột giữ lại: cột 'freq' và các cột bắt đầu bằng phần tử trong response_ids
+            cols_to_keep = ['freq']
+            for prefix in response_ids:
+                cols_to_keep += [str(col) for col in df.columns if str(col).startswith(str(prefix) + ".")]
+   
+            df_filtered = df[cols_to_keep].copy()
+            # Ghép các cột R và I thành số phức
+            for prefix in response_ids:
+                df_filtered = combine_complex_columns_structure_ax(df_filtered, prefix)
+
+            # Chỉ giữ lại cột freq và các cột số phức mới (tên là prefix)
+            cols_final = ['freq'] + response_ids
+            df_final = df_filtered[cols_final]
+
+
+            os.makedirs(output_folder, exist_ok=True)
+            output_path = os.path.join(output_folder, filename)
+            df_final.to_csv(output_path, index=False)      
+    rename_columns_based_on_folder(output_folder)  
+            
+def convert_complex_structure_ay(response_ids, input_folder):
+    output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ay"             
+    for filename in os.listdir(input_folder):
+        if filename.endswith('.csv'):
+            file_path = os.path.join(input_folder, filename)
+            df = pd.read_csv(file_path)
+            # Lọc cột giữ lại: cột 'freq' và các cột bắt đầu bằng phần tử trong response_ids
+            cols_to_keep = ['freq']
+            for prefix in response_ids:
+                cols_to_keep += [str(col) for col in df.columns if str(col).startswith(str(prefix) + ".")]
+   
+            df_filtered = df[cols_to_keep].copy()
+            # Ghép các cột R và I thành số phức
+            for prefix in response_ids:
+                df_filtered = combine_complex_columns_structure_ay(df_filtered, prefix)
+
+            # Chỉ giữ lại cột freq và các cột số phức mới (tên là prefix)
+            cols_final = ['freq'] + response_ids
+            df_final = df_filtered[cols_final]
+
+            os.makedirs(output_folder, exist_ok=True)
+            output_path = os.path.join(output_folder, filename)
+            df_final.to_csv(output_path, index=False)          
+    rename_columns_based_on_folder(output_folder)        
+            
+def convert_complex_structure_az(response_ids, input_folder):
+    output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_az"    
+    for filename in os.listdir(input_folder):
+        if filename.endswith('.csv'):
+            file_path = os.path.join(input_folder, filename)
+            df = pd.read_csv(file_path)
+
+            cols_to_keep = ['freq']
+            for prefix in response_ids:
+                cols_to_keep += [str(col) for col in df.columns if str(col).startswith(str(prefix) + ".")]
+   
+            df_filtered = df[cols_to_keep].copy()
+
+            for prefix in response_ids:
+                df_filtered = combine_complex_columns_structure_az(df_filtered, prefix)
+
+            cols_final = ['freq'] + response_ids
+            df_final = df_filtered[cols_final]
+
+
+            os.makedirs(output_folder, exist_ok=True)
+            output_path = os.path.join(output_folder, filename)
+            df_final.to_csv(output_path, index=False) 
+    rename_columns_based_on_folder(output_folder)
+
+
+def rename_columns_based_on_folder(folder_path):
+    # Lấy 2 ký tự cuối cùng của tên folder
+    folder_suffix = os.path.basename(folder_path)[-2:].lower()
+
     for filename in os.listdir(folder_path):
         if filename.endswith('.csv'):
             file_path = os.path.join(folder_path, filename)
-
-            # Đọc file CSV
             df = pd.read_csv(file_path)
 
-            # Tìm các cặp cột R và I (đuôi .R và .I)
-            # Ví dụ: '2001.px.R' và '2001.px.I'
-            # Lấy tên tiền tố chung trước .R hoặc .I
-            complex_cols = set()
-            for col in df.columns:
-                if col.endswith('.R'):
-                    prefix = col[:-2]
-                    if prefix + '.I' in df.columns:
-                        complex_cols.add(prefix)
+            cols = df.columns.tolist()
 
-            # Với mỗi prefix, tạo cột complex = R + I*j, xóa cột R và I cũ
-            for prefix in complex_cols:
-                real_col = prefix + '.R'
-                imag_col = prefix + '.I'
-                df[prefix + '_complex'] = df[real_col] + 1j * df[imag_col]
-                df.drop(columns=[real_col, imag_col], inplace=True)
+            # Đổi tên các cột từ cột thứ 2 trở đi
+            new_cols = [cols[0]] + [col + f"_{folder_suffix}" for col in cols[1:]]
 
-            # Lưu file mới với tên 'C.csv' (hoặc bạn có thể đổi tên theo ý muốn)
-            output_filename = filename
-            output_path = os.path.join(output_folder, output_filename)
-            df.to_csv(output_path, index=False)
+            df.columns = new_cols
+
+            df.to_csv(file_path, index=False)
+
 
             
-def split_and_group_files(input_folder, output_folder):
+def merge_csv_files(folders, output_folder):
+    """
+    folders: list các đường dẫn folder cần merge, ví dụ [folder1, folder2, folder3, folder4]
+    output_folder: folder lưu kết quả
+    """
     os.makedirs(output_folder, exist_ok=True)
 
-    for filename in os.listdir(input_folder):
-        if filename.endswith('.csv'):
-            file_path = os.path.join(input_folder, filename)
-            # Đọc file CSV
+    # Lấy danh sách file trong từng folder, lưu dưới dạng set
+    list_of_file_sets = [set(os.listdir(folder)) for folder in folders]
+
+    # Tìm các file trùng tên trong tất cả folder (giao của tất cả set)
+    common_files = set.intersection(*list_of_file_sets)
+
+    for filename in common_files:
+        dfs = []
+        freq_col = None
+
+        for folder in folders:
+            file_path = os.path.join(folder, filename)
             df = pd.read_csv(file_path)
 
-            # Lấy cột đầu tiên (ví dụ 'freq')
-            first_col = df.columns[0]
+            # Lấy cột freq từ file đầu tiên
+            if freq_col is None:
+                freq_col = df[['freq']]
 
-            # Lặp qua các cột còn lại
-            for col in df.columns[1:]:
-                df_new = df[[first_col, col]].copy()
+            # Lấy các cột khác (ngoại trừ freq)
+            df_data = df.drop(columns=['freq'])
+            dfs.append(df_data)
 
-                # Loại bỏ '_px_complex' trong tên cột nếu có
-                safe_col_name = col.replace('.px_complex', '')
+        # Ghép cột freq và các dữ liệu từ tất cả các file
+        df_merged = pd.concat([freq_col] + dfs, axis=1)
 
-                # Lấy tiền tố nhóm (ví dụ '2001' từ '2001.px_complex')
-                # Giả sử tên cột dạng '2001.px_complex' hoặc '2001.px'
-                group_name = safe_col_name.split('.')[0]
+        # Lưu file kết quả
+        output_path = os.path.join(output_folder, filename)
+        df_merged.to_csv(output_path, index=False)
 
-                # Tạo thư mục nhóm nếu chưa có
-                group_folder = os.path.join(output_folder, group_name)
-                os.makedirs(group_folder, exist_ok=True)
+           
+   
+def sanitize_filename(name):
+    # Loại bỏ dấu '/' đầu và thay bằng '_', để làm tên file hợp lệ
+    parts = name.split('/')
+    if len(parts) == 3:
+        temp=  parts[1] + "_"+  parts[2]
+        final_name= temp.replace('N', '')
+    else:
+        final_name = name.strip('/').replace('/', '_')
+    # Kiểm tra đủ 3 phần
+    return final_name
 
-                new_filename = f"{os.path.splitext(filename)[0]}.csv"
-                output_path = os.path.join(group_folder, new_filename)
-
-                # Lưu file mới
-                df_new.to_csv(output_path, index=False)
-
-                
-def str_to_complex(s):
-    try:
-        return complex(s)
-    except:
-        return complex(0,0)  # hoặc xử lý lỗi phù hợp
-
-def multiply_complex_columns(folder_A, folder_B, folder_C):
-    os.makedirs(folder_C, exist_ok=True)
-    renamefile_reactionforce(folder_A, folder_B)
-    # Lấy danh sách file trong folder A và B
-    files_A = [f for f in os.listdir(folder_A) if f.endswith('.csv')]
-    files_B = [f for f in os.listdir(folder_B) if f.endswith('.csv')]
+def export_dataset_to_csv(dataset, filename):
+    data = dataset[()]
+    # Kiểm tra kiểu dữ liệu
+    if data.dtype.names is not None:
+        # Dataset structured (compound) có nhiều trường
+        field_names = data.dtype.names
     
-    
-    # Tạo dict để dễ tìm file theo tên file (không bao gồm phần mở rộng)
-    dict_A = {os.path.splitext(f)[0]: f for f in files_A}
-    dict_B = {os.path.splitext(f)[0]: f for f in files_B}
-    
-#    print("dict_A.keys()")
-#    print(dict_A.keys())
+        # Nếu data là mảng 1 chiều hoặc nhiều chiều
+        # Chuyển data thành mảng 2 chiều: mỗi hàng là một record, mỗi cột là một field
+        if data.ndim == 0:
+            # Scalar structured, chuyển thành 1 record
+            rows = [[data[field] for field in field_names]]
+        else:
+            rows = []
+            for record in data:
+                rows.append([record[field] for field in field_names])
+    else:
+        # Dataset không có tên trường, coi như 1 biến 'value'
+        field_names = ['value']
+        if np.isscalar(data):
+            rows = [[data]]
+        elif data.ndim == 1:
+            rows = [[v] for v in data]
+        else:
+            # Nếu nhiều chiều, flatten thành 1 chiều
+            flat = data.flatten()
+            rows = [[v] for v in flat]
 
-#    print("dict_B.keys()")
-#    print(dict_B.keys())
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(field_names)  # header
+        writer.writerows(rows)
 
-    
-    # Tìm các file có tên giống nhau (không tính phần mở rộng)
-    common_files = set(dict_A.keys()) & set(dict_B.keys())
-    common_files = sorted(common_files)
+def export_all_datasets(h5file_path, output_dir):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    with h5py.File(h5file_path, 'r') as f:
+        def visitor(name, obj):
+            if isinstance(obj, h5py.Dataset):
+                filename = sanitize_filename(name) + '.csv'
+                if filename != "NODE_IDS.csv":
+                    filepath = os.path.join(output_dir, filename)
+                    export_dataset_to_csv(obj, filepath)
+        f.visititems(visitor)
   
-#    print("common_files")
-#    print(common_files)
-    
-    
-    for base_name in common_files:
-        file_A = os.path.join(folder_A, dict_A[base_name])
-        file_B = os.path.join(folder_B, dict_B[base_name])
+def build_database_csv_BlockedForce(save_to, body_csv, avl_files,node_ids, response_ids):
+  dname = "/NODE_IDS"
+  with h5py.File(save_to, "w") as df:
+#    df.attrs["num_mounts"] = num_mounts
+    df.attrs["body_csv"] = ""
+    dtype = np.dtype( [("body_nids", "i8")] )
+    dset = df.create_dataset(dname, data=np.core.records.fromarrays(node_ids, dtype=dtype))
 
-        # Đọc file
-        df_A = pd.read_csv(file_A)
-        df_B = pd.read_csv(file_B)
+#############
 
-        # Lấy cột đầu tiên (cột 1)
-        col1 = df_A.columns[0]
-        # Lấy cột thứ hai (cột 2) - đã là số phức, nhân trực tiếp
-        col2 = df_A.columns[1]
-        
-        # Chuyển cột số phức (cột 2) sang kiểu complex
-        df_A['complex_A'] = df_A.iloc[:,1].apply(str_to_complex)
-        df_B['complex_B'] = df_B.iloc[:,1].apply(str_to_complex)
-
-        # Nhân 2 cột số phức
-        df_result = pd.DataFrame()
-        df_result['freq'] = df_A.iloc[:,0]  # cột freq giữ nguyên
-        df_result['complex_product'] = df_A['complex_A'] * df_B['complex_B']
-
-        # Tạo dataframe kết quả
-        df_result = pd.DataFrame({
-            col1: df_A[col1],
-            'complex': df_result['complex_product'] 
-        })
-
-        # Lưu file kết quả vào folder C với tên giống file gốc
-        output_path = os.path.join(folder_C, base_name + '.csv')
-        df_result.to_csv(output_path, index=False)
- 
-
-
-def renamefile_reactionforce(folder_A, folder_B):
-    # Lấy danh sách file trong folder A và B
-    files_A = [f for f in os.listdir(folder_A) if f.endswith('.csv')]
-    files_B = [f for f in os.listdir(folder_B) if f.endswith('.csv')]
-
-    # Tạo dict để dễ tìm file theo tên file (không bao gồm phần mở rộng)
-    dict_A = {os.path.splitext(f)[0]: f for f in files_A}
-    dict_B = {os.path.splitext(f)[0]: f for f in files_B}
-    
-#     print("dict_A.keys()")
-#     print(dict_A.keys())
-
-#     print("dict_B.keys()")
-#     print(dict_B.keys())
-
-    # Lấy keys từ dict_A và dict_B
-    keys_A = dict_A.keys()
-    keys_B = dict_B.keys()
-
-    # Hàm lấy phần số trước dấu gạch dưới
-    def extract_prefix(keys):
-        prefixes = set()
-        for key in keys:
-            prefix = key.split('_', 1)[0]
-            prefixes.add(prefix)
-        return sorted(prefixes)
-
-    # Lấy dải số từ dict_A và dict_B
-    prefixes_A = extract_prefix(keys_A)  # ['80001', '80002', '80003']
-    prefixes_B = extract_prefix(keys_B)  # ['1000', '1001', '1002']
-    mapping = dict(zip(prefixes_A, prefixes_B))    
-    
-    files_A = [f for f in os.listdir(folder_A) if f.endswith('.csv')]
-
-    for filename in files_A:
-        # Tách phần tên file và phần mở rộng
-        name, ext = os.path.splitext(filename)
-        # Tách prefix và phần còn lại
-        parts = name.split('_', 1)
-        if len(parts) == 2:
-            prefix, suffix = parts
-            # Kiểm tra prefix có trong mapping không
-            if prefix in mapping:
-                new_prefix = mapping[prefix]
-                new_name = f"{new_prefix}_{suffix}{ext}"
-                old_path = os.path.join(folder_A, filename)
-                new_path = os.path.join(folder_A, new_name)
-                # Đổi tên file
-                os.rename(old_path, new_path)
-
-
- 
-
-def sum_complex_columns_in_folder(folder_path, output_folder, output_filename,pres_reflevel,acce_reflevel):
-
-    folder_name = os.path.basename(folder_path)
-    print(folder_name)  # Kết quả: MyFolder
-    
-    try:
-        # Thử chuyển folder_name thành số nguyên
-        num = int(folder_name)
-        os.makedirs(output_folder, exist_ok=True)
-        file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
-        total_complex = None
-        freq = None
-
-        for i, file_name in enumerate(file_list):
-            file_path = os.path.join(folder_path, file_name)
-            df = pd.read_csv(file_path)
-
-            # Lấy cột freq (cột 1)
-            if freq is None:
-                freq = df.iloc[:, 0]
-
-            # Lấy cột số phức (cột 2), chuyển sang số phức nếu đang dạng string
-            complex_col = df.iloc[:, 1].apply(lambda x: complex(str(x).replace(' ', '')))
-
-            if total_complex is None:
-                total_complex = complex_col
-            else:
-                total_complex = total_complex + complex_col
-
-        magnitude = total_complex.abs()  # hoặc np.abs(total_complex)
-        SPL = 20 * np.log10(magnitude / float(pres_reflevel))
-
-        # Công thức A-weighting (đã sửa dấu ngoặc và phép toán)
-        numerator = 12194**2 * freq**4
-        denominator = (freq**2 + 20.6**2) * np.sqrt((freq**2 + 107.7**2) * (freq**2 + 737.9**2)) * (freq**2 + 12194**2)
-        A_weighting = 20 * np.log10(numerator / denominator) + 2
-
-        SPL_A_weight = SPL + A_weighting
-
-        # Tạo dataframe kết quả
-        df_result = pd.DataFrame({
-            'freq': freq,
-            'complex': total_complex,
-            'magnitude_MPa': magnitude,         
-            'magnitude_dB': SPL,         
-            'magnitude_dBA': SPL_A_weight       
-        })
-
-        new_filename = f"{output_filename}.csv"
-        output_file = os.path.join(output_folder, new_filename)
-
-        # Lưu file kết quả
-        df_result.to_csv(output_file, index=False)
-    except ValueError:
-        os.makedirs(output_folder, exist_ok=True)
-        file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
-        total_complex = None
-        freq = None
-
-        for i, file_name in enumerate(file_list):
-            file_path = os.path.join(folder_path, file_name)
-            df = pd.read_csv(file_path)
-
-            # Lấy cột freq (cột 1)
-            if freq is None:
-                freq = df.iloc[:, 0]
-
-            # Lấy cột số phức (cột 2), chuyển sang số phức nếu đang dạng string
-            complex_col = df.iloc[:, 1].apply(lambda x: complex(str(x).replace(' ', '')))
-
-            if total_complex is None:
-                total_complex = complex_col
-            else:
-                total_complex = total_complex + complex_col
-
-        magnitude = total_complex.abs()  # hoặc np.abs(total_complex)
-        dB = 20 * np.log10(magnitude / float(acce_reflevel))
-        
-        # Công thức A-weighting (đã sửa dấu ngoặc và phép toán)
-        numerator = 12194**2 * freq**4
-        denominator = (freq**2 + 20.6**2) * np.sqrt((freq**2 + 107.7**2) * (freq**2 + 737.9**2)) * (freq**2 + 12194**2)
-        A_weighting = 20 * np.log10(numerator / denominator) + 2
-
-        acc_A_weight = dB + A_weighting
-
-
-
-        # Tạo dataframe kết quả
-        df_result = pd.DataFrame({
-            'freq': freq,
-            'complex': total_complex,
-            'magnitude_MPa': magnitude,         
-            'magnitude_dB': dB,
-            'magnitude_dBA': acc_A_weight               
-        })
-
-        new_filename = f"{output_filename}.csv"
-        output_file = os.path.join(output_folder, new_filename)
-
-        # Lưu file kết quả
-        df_result.to_csv(output_file, index=False)
-        
-# Định nghĩa các băng tần 1/3 octave
-Oct3Band = namedtuple("Oct3Band", ["mean", "lower", "upper"])
-oct3bands = (
-    Oct3Band(1.25, 1.12, 1.41), Oct3Band(1.60, 1.41, 1.78), Oct3Band(2.00, 1.78, 2.24),
-    Oct3Band(2.50, 2.24, 2.82), Oct3Band(3.15, 2.82, 3.55), Oct3Band(4.00, 3.55, 4.47),
-    Oct3Band(5.00, 4.47, 5.62), Oct3Band(6.30, 5.62, 7.08), Oct3Band(8.00, 7.08, 8.91),
-    Oct3Band(10.0, 8.91, 11.2), Oct3Band(12.5, 11.2, 14.1), Oct3Band(16.0, 14.1, 17.8),
-    Oct3Band(20.0, 17.8, 22.4), Oct3Band(25.0, 22.4, 28.2), Oct3Band(31.5, 28.2, 35.5),
-    Oct3Band(40.0, 35.5, 44.7), Oct3Band(50.0, 44.7, 56.0), Oct3Band(63.0, 56.0, 70.7),
-    Oct3Band(80.0, 70.7, 89.1), Oct3Band(100.0, 89.1, 112.0), Oct3Band(125.0, 112.0, 141.0),
-    Oct3Band(160.0, 141.0, 178.0), Oct3Band(200.0, 178.0, 224.0), Oct3Band(250.0, 224.0, 282.0),
-    Oct3Band(315.0, 282.0, 355.0), Oct3Band(400.0, 355.0, 447.0), Oct3Band(500.0, 447.0, 562.0),
-    Oct3Band(630.0, 562.0, 708.0), Oct3Band(800.0, 708.0, 891.0), Oct3Band(1000.0, 891.0, 1120.0),
-    Oct3Band(1250.0, 1120.0, 1410.0), Oct3Band(1600.0, 1410.0, 1780.0), Oct3Band(2000.0, 1780.0, 2240.0),
-    Oct3Band(2500.0, 2240.0, 2820.0), Oct3Band(3150.0, 2820.0, 3550.0), Oct3Band(4000.0, 3550.0, 4470.0),
-    Oct3Band(5000.0, 4470.0, 5620.0), Oct3Band(6300.0, 5620.0, 7080.0), Oct3Band(8000.0, 7080.0, 8910.0),
-    Oct3Band(10000.0, 8910.0, 11200.0), Oct3Band(12500.0, 11200.0, 14100.0), Oct3Band(16000.0, 14100.0, 17800.0),
-    Oct3Band(20000.0, 17800.0, 22400.0)
-)
-
-class ThirdOctaveTransform:
-    def __init__(self, freq, isdecibel=True):
-        self.freq = np.ma.masked_less(freq, oct3bands[0].lower)
-        bins = [band.lower for band in oct3bands] + [oct3bands[-1].upper]
-        self.bins = bins
-        self.isdecibel = isdecibel
-        self.bin_indices = np.digitize(self.freq.compressed(), bins) - 1
+    body_response_nids = set()
+    body_microphone_response_nids = set()
+    microphone_response_nids = set()    
+    bodydata = {}
+    column_names = {}   
+    with open(body_csv[0], 'r') as f:
+      column_line = f.readline().strip()
+    column = column_line.split(',')
+#    print("len(column)")    
+#    print(len(column))
+    loop_number=(len(column)-1)/4
+#    print("loop_number")    
+#    print(loop_number)    
+    for name in column:          
+      if name == "freq":
+        continue
+      nid, lbl, MagPhase = name.split(".")
+      if lbl == "ax" and MagPhase=="Mag":
+        body_response_nids.add(int(nid))
+      if lbl == "px" and MagPhase=="Mag":
+        microphone_response_nids.add(int(nid)) 
           
-        
-        
-        self.max_index = max(self.bin_indices) if len(self.bin_indices) > 0 else 0
+#    print("body_response_nids_database_builder")
+#    print(body_response_nids) 
+#    print("microphone_response_nids_database_builder")
+#    print(microphone_response_nids)   
+    rpm=0    
+  
+    for fpath in body_csv:
+      fname = os.path.splitext(os.path.basename(fpath))[0]
+      name_components = fname.split("_")
+      body_nids = node_ids[0, :].tolist()  # ボディノードIDリスト
+#      print("body_nids")
+#      print(body_nids)
+      enforced_nid = name_components[1][1:]
+#      print("enforced_nid")
+#      print(enforced_nid)      
+      enforced_label = name_components[-1]
+#      print("enforced_label")
+#      print(enforced_label)
+      data = pd.read_csv(fpath).to_numpy()
 
-    @property
-    def x_ticks(self):
-        # Trả về danh sách tick (lower và upper) cho từng băng tần
-        ticks = []
-        for band in oct3bands[:self.max_index + 1]:
-            ticks.append(band.lower)
-            ticks.append(band.upper)
-        return ticks
-
-    def __call__(self, x, *args, **kwargs):
-        # Lọc dữ liệu theo mask
-        mask = ~self.freq.mask
-     
-        x = x[mask]
-        freq = self.freq.data[mask]
-
-        if np.iscomplexobj(x):
-            x = np.abs(x)
-
-        if self.isdecibel:
-            transform = lambda vals: 10 ** (vals / 10.)
+      bodydata[rpm] = []
+      column_names[rpm] = []  
+      for k in range(0,int(loop_number)):
+        body_freq = data[:, 0]
+        body_resp_1 = data[:, 4*k+1]
+        body_resp_2 = data[:, 4*k+2]
+        body_resp_3 = data[:, 4*k+3]
+        body_resp_4 = data[:, 4*k+4] 
+#        print("body_resp_1 k")  
+#        print(fname)
+#        print(k)    
+#        print(data[2, 4*k+1])
+        new_colnames = [column[4*k+1],column[4*k+2],column[4*k+3],column[4*k+4]]
+        if len(bodydata[rpm]):
+          bodydata[rpm].extend([body_resp_1, body_resp_2, body_resp_3, body_resp_4])
+          column_names[rpm].extend(new_colnames)
         else:
-            transform = lambda vals: vals ** 2
-
-        transformed = transform(x)
-
-        # Lọc bin_indices tương ứng với mask
-        bin_indices = self.bin_indices[mask]
-
-        levels = np.zeros(self.max_index + 1)
+          bodydata[rpm].append([body_freq,body_resp_1,body_resp_2,body_resp_3, body_resp_4])
+          column_names[rpm].extend(["freq"] + new_colnames)
+          
+      for rpm, data in bodydata.items():
+        dname = f"/BodyMount/N{enforced_nid}/{enforced_label.upper()}"
+        print("dname")
+        print(dname)
+        collated_data = pd.DataFrame(np.vstack(data).T, columns=column_names[rpm])    
+        print("collated_data")
+        print(collated_data)
+        dset = df.create_dataset(dname, data=cast_to_structured_array(collated_data))        
         
-#        print(f"len(self.bin_indices) = {len(self.bin_indices)}")
-#        print(f"len(mask) = {len(transformed[0])}")
-        
-        # Đảm bảo transformed và bin_indices có cùng kích thước
-        np.add.at(levels, bin_indices, transformed)
+    response_ids_set = set(response_ids)
+    df.attrs['response_id_body'] = list(response_ids_set & body_response_nids)  # ボディ関連
 
-        if self.isdecibel:
-            levels = 10 * np.log10(levels)
-            levels = np.nan_to_num(levels, nan=0, posinf=0, neginf=0)
-        else:
-            levels = np.sqrt(levels)
 
-        # Lặp lại mỗi giá trị 2 lần cho tick
-        levels_expanded = []
-        for val in levels:
-            levels_expanded.extend([val, val])
+###########
+    avldata = {}
+    column_names = {}
+    axis_labels = ("fx", "fy", "fz", "rx", "ry", "rz")
+    avl_nids = node_ids[0, :].tolist()
+    for fpath in avl_files:
+      fname = os.path.splitext(os.path.basename(fpath))[0]
+      name_components = fname.split("_")
+      axis = axis_labels[int(name_components[-1][-1]) - 1]
+      print("axis")
+      print(axis)
+      rpm = 0
+      mount_nid = int(name_components[-2])
+      print("mount_nid")
+      print(mount_nid)      
+      if mount_nid not in avl_nids:
+        continue
 
-        return levels_expanded
+      if rpm not in avldata:
+        avldata[rpm] = []
+        column_names[rpm] = []
 
-def OneThirdOctave_calculation(input_folder,output_folder ):
-    for filename in os.listdir(input_folder):
-        if filename.endswith('.csv'):
-            file_path = os.path.join(input_folder, filename)
-            df = pd.read_csv(file_path)
+      data = pd.read_csv(fpath, skiprows=[1]).to_numpy()
+      avl_freq = data[:, 0]
+      mag = data[:, 1]
+      phase = np.radians(data[:, 2])
+      # interp_data = np.interp(nast_freq, avl_freq, mag * np.cos(phase) + 1.j * mag * np.sin(phase) )
+      avl_resp = mag * np.cos(phase) + 1.j * mag * np.sin(phase)
+      new_colnames = [f"{mount_nid}.{axis}.{comp}" for comp in ("R", "I", "Mag", "Phase")]
 
-            # Lấy cột 1 từ hàng số 3 trở đi (index 2 trở đi)
-            freq = df.iloc[1:, 0].reset_index(drop=True)
- 
-            
-            # Lấy cột 5 từ hàng số 3 trở đi (index 2 trở đi)
-            data_dbA = df.iloc[1:, 4].reset_index(drop=True)
-            
-            if pd.isna(freq.iloc[-1]):
-                freq = freq.iloc[:-1]
+      if len(avldata[rpm]):
+        # avldata[rpm].extend([interp_data.real, interp_data.imag, np.abs(interp_data), np.angle(interp_data, True)])
+        avldata[rpm].extend([avl_resp.real, avl_resp.imag, np.abs(avl_resp), np.angle(avl_resp, True)])
+        column_names[rpm].extend(new_colnames)
+      else:
+        # avldata[rpm].append([nast_freq, interp_data.real, interp_data.imag, np.abs(interp_data), np.angle(interp_data, True)])
+        avldata[rpm].append([avl_freq, avl_resp.real, avl_resp.imag, np.abs(avl_resp), np.angle(avl_resp, True)])
+        column_names[rpm].extend(["freq"] + new_colnames)
 
-            if pd.isna(data_dbA.iloc[-1]):
-                data_dbA = data_dbA.iloc[:-1]
-
-            freq_array = freq.to_numpy()
-            data_array = data_dbA.to_numpy()
-
-            # Khởi tạo biến chuyển đổi
-            transform = ThirdOctaveTransform(freq_array, isdecibel=True)
-
-            # Lấy tick cho trục x
-            x_ticks = transform.x_ticks
-
-            # Chuyển đổi dữ liệu sang dạng 1/3 octave
-            y_values = transform(data_array)
+    for rpm, data in avldata.items():
+      dname = f"/AVLMount/{rpm}RPM"
+      collated_data = pd.DataFrame(np.vstack(data).T, columns=column_names[rpm])
+      dset = df.create_dataset(dname, data=cast_to_structured_array(collated_data))
 
 
 
-            df_new = pd.DataFrame({
-                'freq': x_ticks,
-                'value': y_values
-            })
-
-            output_path = os.path.join(output_folder, filename)
-            df_new.to_csv(output_path, index=False)
-
-
-def interpolate_complex_csv(input_folder,output_folder, delta_freq,pres_reflevel,acce_reflevel):
-    print("interpolate_complex_csv")
-   
-    for filename in os.listdir(input_folder):
-      
-        if filename.endswith('.csv'):
-            file_path = os.path.join(input_folder, filename)   
-
-            # Đọc dữ liệu
-            df = pd.read_csv(file_path)
-            # Lấy cột freq và value (giá trị phức)
-            value = df['complex'].apply(lambda x: complex(x.replace(' ', ''))).values
-            freq = df.iloc[0:, 0].reset_index(drop=True)
-
-            value = df.iloc[0:, 1].reset_index(drop=True)
-            value_new = value.apply(lambda x: complex(x.replace(' ', ''))).values
-        
-            freq_array = freq.to_numpy()            
-
-
-            # Tạo dải tần số mới theo delta_freq
-            freq_new = np.arange(freq_array[0], freq_array[-1], delta_freq)
-
-
-            # Nội suy phần thực và phần ảo riêng biệt
-            real_interp = np.interp(freq_new, freq_array, value_new.real)
-            imag_interp = np.interp(freq_new, freq_array, value_new.imag)
-
-            # Kết hợp lại thành số phức
-            value_new = real_interp + 1j * imag_interp
-            
-            magnitude =  np.abs(value_new)  # hoặc np.abs(total_complex)
-            file_name_with_ext = os.path.basename(file_path)
-            file_name, file_ext = os.path.splitext(file_name_with_ext)
-
-            try:
-                # Thử chuyển folder_name thành số nguyên
-                num = int(file_name)
-        
-                SPL = 20 * np.log10(magnitude / float(pres_reflevel))
-
-                # Công thức A-weighting (đã sửa dấu ngoặc và phép toán)
-                numerator = 12194**2 * freq_new**4
-                denominator = (freq_new**2 + 20.6**2) * np.sqrt((freq_new**2 + 107.7**2) * (freq_new**2 + 737.9**2)) * (freq_new**2 + 12194**2)
-                A_weighting = 20 * np.log10(numerator / denominator) + 2
-
-                SPL_A_weight = SPL + A_weighting
-                # Tạo dataframe kết quả
-                df_new = pd.DataFrame({
-                    'freq': freq_new,
-                    'SPL_complex': value_new,
-                    'SPL_magnitude_MPa': magnitude,         
-                    'SPL_magnitude_dB': SPL,         
-                    'SPL_magnitude_dBA': SPL_A_weight       
-                })
-                output_path = os.path.join(output_folder, filename)
-                df_new.to_csv(output_path, index=False)
-
-            except ValueError:
-                SPL = 20 * np.log10(magnitude / float(acce_reflevel))
-
-                # Công thức A-weighting (đã sửa dấu ngoặc và phép toán)
-                numerator = 12194**2 * freq_new**4
-                denominator = (freq_new**2 + 20.6**2) * np.sqrt((freq_new**2 + 107.7**2) * (freq_new**2 + 737.9**2)) * (freq_new**2 + 12194**2)
-                A_weighting = 20 * np.log10(numerator / denominator) + 2
-
-                SPL_A_weight = SPL + A_weighting
-
-                # Tạo dataframe kết quả
-                df_new = pd.DataFrame({
-                    'freq': freq_new,
-                    'SPL_complex': value_new,
-                    'SPL_magnitude_MPa': magnitude,         
-                    'SPL_magnitude_dB': SPL,         
-                    'SPL_magnitude_dBA': SPL_A_weight       
-                })
-                output_path = os.path.join(output_folder, filename)
-                df_new.to_csv(output_path, index=False)
-    
+  return
 
 
 
 
-def csv_blockedforce_calculation(pres_reflevel,acce_reflevel):
-    input_folder = current_path + '\\BlockedForce\\bf_body_blocked_force_csv_temp'  
-    output_folder = current_path + '\\BlockedForce\\body_blocked_force_convert_complex\\'
-    convert_complex(input_folder, output_folder)
-    
-    input_folder = current_path + '\\BlockedForce\\body_blocked_force_convert_complex\\'
-    output_folder = current_path + '\\BlockedForce\\body_blocked_force_split_and_group_files\\' 
-    split_and_group_files(input_folder, output_folder)
- 
-
-    folder_a = current_path + '\\BlockedForce\\body_blocked_force_split_and_group_files\\'  # Thư mục gốc
-    # Lấy danh sách các thư mục con trong folder_a
-    subfolders = [f for f in os.listdir(folder_a) if os.path.isdir(os.path.join(folder_a, f))]
-
-    for folder_name in subfolders:
-        folder_reactionforce = current_path + '\\BlockedForce\\bf_reactionforce\\'   
-        folder_body = current_path + '\\BlockedForce\\body_blocked_force_split_and_group_files\\' + folder_name
-        output_folder = current_path + '\\BlockedForce\\multiply_complex_columns\\'+ folder_name
-
-        multiply_complex_columns(folder_reactionforce, folder_body, output_folder)    
-        input_folder = current_path + '\\BlockedForce\\multiply_complex_columns\\'+ folder_name  
-        output_folder = current_path + '\\BlockedForce\\SPL_BF\\'  
-        sum_complex_columns_in_folder(input_folder, output_folder, folder_name,pres_reflevel,acce_reflevel)
-        
-    input_folder = current_path + '\\BlockedForce\\SPL_BF\\'
-    output_folder = current_path + '\\BlockedForce\\SPL_BF_3rdOctave\\' 
-    OneThirdOctave_calculation(input_folder, output_folder)   
-    
-
-   
-#    shutil.rmtree(current_path + '\\BlockedForce\\body_blocked_force_convert_complex\\')
-#    shutil.rmtree(current_path + '\\BlockedForce\\body_blocked_force_split_and_group_files\\')
-#    shutil.rmtree(current_path + '\\BlockedForce\\multiply_complex_columns\\')        
-
-    
-def pch_blockedforce_calculation(pres_reflevel,acce_reflevel):
-    
-    input_folder = current_path + '\\BlockedForce\\body_blocked_force_convert_complex\\'
-    output_folder = current_path + '\\BlockedForce\\body_blocked_force_split_and_group_files\\' 
-    split_and_group_files(input_folder, output_folder)
- 
-
-    folder_a = current_path + '\\BlockedForce\\body_blocked_force_split_and_group_files\\'  # Thư mục gốc
-    # Lấy danh sách các thư mục con trong folder_a
-    subfolders = [f for f in os.listdir(folder_a) if os.path.isdir(os.path.join(folder_a, f))]
-
-    for folder_name in subfolders:
-        folder_reactionforce = current_path + '\\BlockedForce\\bf_reactionforce\\'   
-        folder_body = current_path + '\\BlockedForce\\body_blocked_force_split_and_group_files\\' + folder_name
-        output_folder = current_path + '\\BlockedForce\\multiply_complex_columns\\'+ folder_name
-        multiply_complex_columns(folder_reactionforce, folder_body, output_folder)    
-
-        input_folder = current_path + '\\BlockedForce\\multiply_complex_columns\\'+ folder_name  
-        output_folder = current_path + '\\BlockedForce\\SPL_BF\\'  
-        sum_complex_columns_in_folder(input_folder, output_folder, folder_name,pres_reflevel,acce_reflevel)
-        
-    input_folder = current_path + '\\BlockedForce\\SPL_BF\\'
-    output_folder = current_path + '\\BlockedForce\\SPL_BF_3rdOctave\\' 
-    OneThirdOctave_calculation(input_folder, output_folder)        
-#    shutil.rmtree(current_path + '\\BlockedForce\\body_blocked_force_convert_complex\\')
-#    shutil.rmtree(current_path + '\\BlockedForce\\body_blocked_force_split_and_group_files\\')
-#    shutil.rmtree(current_path + '\\BlockedForce\\multiply_complex_columns\\')        
-
-
-
- 
+if __name__ == "__main__":
+  pch_file = sys.argv[1]
+  outputname = sys.argv[2]
+  with PunchReader(pch_file) as f:
+    data = f.parse()
+    for subcase_id, subcase_data in data.items():
+      outputfile = outputname + f"_{subcase_data['enforced_nid']}.{subcase_data['enforced_label']}.csv"
+      subcase_data["response"].to_csv(outputfile)
