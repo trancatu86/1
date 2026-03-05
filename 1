@@ -1,1816 +1,3532 @@
-import webbrowser
-import plotly
-import json
-import os
-import shutil
-import numpy as np
-import h5py
-import time
-import sys
-import traceback
-from flask import Flask, render_template, request, Response, abort, send_from_directory, escape, send_file,jsonify
-
-from collections import namedtuple
-from threading import Timer
-import pandas as pd
-import datetime
-import csv
-from openpyxl import load_workbook
-import win32com.client as win32
-
-from synthesis import SynthesisOptions, Plotter, Synthesizer, SynthesisUtility
-from synthesis import vector_to_csv
-from synthesis import get_response_db_n_labels
-from database_builder import build_database_punch, build_database_csv, 
-from blockedforce import build_database_csv_BlockedForce, build_database_punch_BlockedForce, merge_csv_files,build_database_punch_BlockedForce_acoustic,build_database_punch_BlockedForce_body, rename_columns,convert_complex,blockedforce_calculation, convert_csv_ReactionForce, convert_csv_BodyBlockedForce_acoustic,convert_csv_BodyBlockedForce_structure, interpolate_complex_csv, delete_folder_file,OneThirdOctave_calculation
+/*$("#noti").click( (e)=>{
+  changeNoti();
+});*/
 
 
-if getattr(sys, "frozen", False):
-  exec_dir = os.path.dirname(os.path.abspath(sys.executable))
-  wrkdir = sys._MEIPASS
-elif __file__:
-  exec_dir = os.path.dirname(os.path.abspath(__file__))
-  wrkdir = exec_dir
+const capitalizeFirstLetter = function(str){
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
 
-template_dir = os.path.join(wrkdir, "templates")
-static_dir = os.path.join(wrkdir, "static")
 
-class HistoryData:
-  def __init__(self, data, name="history_abc"):
-    self.data = data
-    self.name = name
-    self.in_name_group = False
-
-class HistoryContainer:
-  def __init__(self, capacity=3):
-    self._queue = []
-    self._tempslot = None
-    self._capacity = capacity
-
-  def add(self, name="history_abc"):
-    if len(self._queue) == self._capacity:
-      del self._queue[0]
-    if self._tempslot is not None:
-      self._queue.append(HistoryData(self._tempslot, name))
-      self._tempslot = None
-
-  def preserve(self, data):
-    self._tempslot = data
-
-  def clear(self):
-    self._queue = []
-
-  def _resolve_name_conflicts(self):
-    conflict_counter = {}
-    for hist in self._queue:
-      if hist.name not in conflict_counter:
-        conflict_counter[hist.name] = 0  # no conflict
-      else:
-        conflict_counter[hist.name] += 2 if conflict_counter[hist.name] == 0 else 1  # record the number of histories share the same name
-
-    for idx, hist in enumerate(self._queue[::-1]):  # from latest to oldest
-      if conflict_counter[hist.name] > 0:
-        hist.name = f"{hist.name}[-{idx + 1}]"
-    return  
-
-  def pull(self):
-    if not len(self._queue):
-      return None
-    self._resolve_name_conflicts()
-    return self._queue[::-1]
-
-class AppSession:
-  def __init__(self, history=None, viewing_nid=None, viewing_response_label=None,
-               viewing_type=None, freq_interval=1.0):
-    self.history = history if history is not None else HistoryContainer()
-    self.viewing_nid = viewing_nid
-    self.viewing_response_label = viewing_response_label
-    if viewing_type is None:
-      self.viewing_type = {"result_type": None, "dB": None}
-    else:
-      self.viewing_type = viewing_type
-    self.freq_interval = freq_interval
-    current_path = os.getcwd()
-    for root, dirs, files in os.walk(current_path + "\\BlockedForce\\"):
-        for file in files:
-            if file.endswith('.csv'):
-                file_path = os.path.join(root, file)
-                os.remove(file_path) 
-app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
-app.config["TEMPLATES_AUTO_RELOAD"] = True
-app.config["UPLOAD_DIR"] = os.path.join(wrkdir, "uploads")
-app.config["DB_DIR"] = os.path.join(exec_dir, "db")
-app.config["RESPONSE_DIR"] = os.path.join(wrkdir, "responses")
-app.config["DOWNLOAD_TOKEN"] = None
-app.config["USER_CLASS"] = "admin"
-_DB_NAME = "database.h5"
-_LOAD_DB_PATH = os.path.join(app.config["DB_DIR"], _DB_NAME)
-
-_BUILT_DB_PATH = os.path.join(app.config["RESPONSE_DIR"], _DB_NAME)
-_DEFAULT_PRES_REFLEVEL = 2e-11
-_DEFAULT_ACCE_REFLEVEL = 1e-3
-
-sess = AppSession()
-
-def database_exists():
-  if not os.path.exists(app.config["DB_DIR"]):
-    os.makedirs(app.config["DB_DIR"], exist_ok=True)
-  if not os.path.exists(_LOAD_DB_PATH):
-    return False
-  return True
-
-@app.route("/")
-def index():
-  global sess
-  sess = AppSession()
-  opts = SynthesisOptions(_LOAD_DB_PATH)
-  opts.response_id, opts.response_dbname, opts.response_labels = get_response_db_n_labels(opts)
-  opts.target_resp_label = opts.response_labels[0]
-  pres_reflevel, acce_reflevel = _DEFAULT_PRES_REFLEVEL, _DEFAULT_ACCE_REFLEVEL
-  opts.ref_level = acce_reflevel if len(opts.response_labels) > 1 else pres_reflevel
-  if database_exists():
-    synthesizer = Synthesizer(opts)
-    flex_mount_idxs = synthesizer.get_flexible_mount_idxs()
-  else:
-    flex_mount_idxs = []
-  return render_template("index.html", num_mounts=opts.num_mounts,
-                         ftab_default=opts.ftab_default, pres_reflevel=pres_reflevel, acce_reflevel=acce_reflevel,
-                         userclass=app.config["USER_CLASS"], flex_mount_idxs=flex_mount_idxs)
-
-@app.route("/init_graph", methods=["POST"])
-def init_graph():
-  global sess
-  opts = SynthesisOptions(_LOAD_DB_PATH)
-  opts.response_id, opts.response_dbname, opts.response_labels = get_response_db_n_labels(opts)
-  if len(opts.response_labels) > 1:
-    opts.a_weight = False
-  opts.target_resp_label = opts.response_labels[0]
-  pres_reflevel, acce_reflevel = _DEFAULT_PRES_REFLEVEL, _DEFAULT_ACCE_REFLEVEL
-  opts.ref_level = acce_reflevel if len(opts.response_labels) > 1 else pres_reflevel
-  opts.df = 1.0
-  if not database_exists():
-    plotter = Plotter(opts)
-    graph_json = json.dumps({"status": True,
-                             "meta": {"resp_labels": opts.response_labels,
-                                      "update_resp_labels": True,
-                                      "num_mounts": opts.num_mounts},
-                             "data": plotter.figure}, cls=plotly.utils.PlotlyJSONEncoder)
-    return graph_json
-      
-  try:
-    synthesizer = Synthesizer(opts)
-    Asyn, Atrue, _, _, freq = synthesizer.synthesize()
+class SliderGenerator{
+  constructor(baseSliderId, baseSliderClass, baseSliderLabel){
+    this.baseSliderId = baseSliderId;
+    this.baseSliderClass = baseSliderClass;
+    this.baseSliderLabel = baseSliderLabel;
+    this._createSliderClasses = null;
+    this._createSliderId = null;
+    this._createSliderLabel = null;
+    this._baseCheckboxId = "";
+    this._baseCheckboxLabel = "";
+    this._baseCheckboxClass = "";
+    this._createCheckboxLabel = null;
+    this._createCheckboxClasses = null;
+    this._createCheckboxId = null;
+  }
   
-    
-    sess.history.preserve(Asyn)
-    plotter = Plotter(opts)
-    fig = plotter.generate_synthesis_plot(freq, Asyn, Atrue)
-    graph_json = json.dumps({"status": True,
-                             "meta": {"resp_labels": opts.response_labels,
-                                      "update_resp_labels": True,
-                                      "num_mounts": opts.num_mounts},
-                             "data": fig}, cls=plotly.utils.PlotlyJSONEncoder)
-    sess.viewing_nid = opts.response_id
-    sess.viewing_response_label = opts.target_resp_label
-  except Exception as err:
-    err_msg = type(err).__name__  + ": " + str(err)
-    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
-    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
+  setSliderIdCreator(sliderIdCreator){
+    // sliderIdCreator is a callable that takes
+    // base id, row index, and column index
+    // and returns the id for the slider
+    this._createSliderId = sliderIdCreator;
+  }
+  
+  createSliderId(rowIdx, colIdx){
+    return this._createSliderId(this.baseSliderId, rowIdx, colIdx);
+  }
+  
+  setSliderClassCreator(sliderClassCreator){
+    this._createSliderClasses = sliderClassCreator;
+  }
+  
+  createSliderClasses(rowIdx, colIdx){
+    return this._createSliderClasses(this.baseSliderClass, rowIdx, colIdx);
+  }
+  
+  setSliderLabelCreator(sliderLabelCreator){
+    this._createSliderLabel = sliderLabelCreator;
+  }
+  
+  createSliderLabel(rowIdx, colIdx){
+    return this._createSliderLabel(this.baseSliderLabel, rowIdx, colIdx);
+  }
+  
+  setCheckboxIdCreator(checkboxIdCreator){
+    this._createCheckboxId = checkboxIdCreator;
+  }
+  
+  createCheckboxId(rowIdx){
+    return this._createCheckboxId(this._baseCheckboxId, rowIdx);
+  }
+  
+  setCheckboxClassCreator(checkboxClassCreator){
+    this._createCheckboxClasses = checkboxClassCreator;
+  }
+  
+  createCheckboxClasses(rowIdx){
+    return this._createCheckboxClasses(this._baseCheckboxClass, rowIdx);
+  }
+  
+  setCheckboxLabelCreator(checkboxLabelCreator){
+    this._createCheckboxLabel = checkboxLabelCreator;
+  }
+  
+  createCheckboxLabel(rowIdx){
+    return this._createCheckboxLabel(this._baseCheckboxLabel, rowIdx);
+  }
+  
+  setCheckboxBaseValues(baseId, baseClass, baseLabel){
+    this._baseCheckboxId = baseId;
+    this._baseCheckboxClass = baseClass;
+    this._baseCheckboxLabel = baseLabel;
+  }
+  
+  createSlider(sliderId, sliderClasses, sliderLabel, rowIdx, colIdx){
+    const sliderContainer = $("<div>");
+    sliderClasses.forEach((cls) => sliderContainer.addClass(cls));
+    sliderContainer.addClass("row-" + rowIdx)
+                   .addClass("tuning-col");
+    const label = $("<label>");
+    label.attr("for", sliderId);
+    label.text(sliderLabel);
+    const sliderValIndicator = $("<output>");
+    sliderValIndicator.attr("id", "num" + capitalizeFirstLetter(sliderId));
+    sliderValIndicator.text(0);
+    label.append(sliderValIndicator);
+    sliderContainer.append(label);
+    const slider = $("<input>");
+    slider.addClass("slider")
+          .attr("id", sliderId)
+          .attr("type", "range")
+          .attr("min", -50)
+          .attr("max", 50)
+          .attr("value", 0)
+          .attr("step", 5)
+          .attr("list", "values");
+    sliderContainer.append(slider);
+    return sliderContainer;
+  }
 
-  if opts.no_cross:
-    sess.viewing_type = {"result_type": "no_cross", "dB": opts.to_db}
-  elif opts.compute_contrib:
-    sess.viewing_type = {"result_type": "contrib", "dB": opts.to_db}
-  else:
-    sess.viewing_type = {"result_type": "full", "dB": opts.to_db}
-  return graph_json
+  createSliderRow(rowIdx, numSliders){
+    // labelGenerator is a callable that takes
+    // rowIdx and colIdx as its parameters and generate the label
+    const sliderRowContainer = $("<div>");
+    sliderRowContainer.addClass("tuning-row");
+    for (let colIdx = 1; colIdx <= numSliders; colIdx++){
+      const sliderId = this.createSliderId(rowIdx, colIdx);
+      const sliderClasses = this.createSliderClasses(rowIdx, colIdx);
+      const sliderLabel = this.createSliderLabel(rowIdx, colIdx);
+      const slider = this.createSlider(sliderId, sliderClasses, sliderLabel, rowIdx, colIdx)
+      sliderRowContainer.append(slider);
+    }
+    return sliderRowContainer;
+  }
+  
+  createCheckboxRow(rowIdx){
+    const pdiv = $("<div>");
+    pdiv.addClass("tuning-row");
+    const innerDiv = $("<div>");
+    innerDiv.addClass("content-centered");
+    this.createCheckboxClasses(rowIdx).forEach((cls) => innerDiv.addClass(cls));
+    /*const label = $("<label>");
+    label.addClass("always-hidden");
+    label.attr("for", this.createCheckboxId(rowIdx));
+    label.text(this.createCheckboxLabel(rowIdx));
+    innerDiv.append(label);*/
+    const checkbox = $("<input>");
+    checkbox.attr("type", "checkbox")
+            .attr("id", this.createCheckboxId(rowIdx));
+    innerDiv.append(checkbox);
+    pdiv.append(innerDiv);
+    return pdiv;
+  }
+  
+  createPanelSliders(numRows, numSlidersPerRow=numRows, linkRowSliders=false){
+    const container = $("<div>");
+    let rightDiv = container;
+    if (linkRowSliders){
+      container.append('<div class="left-col">Linked</div>');
+      container.append('<div class="right-col always-hidden">Tuning</div>');
+      const leftDiv = $("<div>");
+      leftDiv.addClass("left-col");
+      for (let rowIdx = 1; rowIdx <= numRows; rowIdx++) {
+        leftDiv.append(this.createCheckboxRow(rowIdx));
+      }
+      container.append(leftDiv);
+      rightDiv = $("<div>");
+      rightDiv.addClass("right-col");
+    }
+    for (let rowIdx = 1; rowIdx <= numRows; rowIdx++){
+      rightDiv.append(this.createSliderRow(rowIdx, numSlidersPerRow));
+    }
+    if (linkRowSliders)
+      container.append(rightDiv);
+    return container;
+  }
+}
 
-@app.route("/get_rpm_list", methods=["GET"])
-def get_rpm_list():
-  utils = SynthesisUtility(SynthesisOptions(_LOAD_DB_PATH))
-  rpm_list = utils.get_rpm_list()
-  rpm_list = [f"{rpm}RPM" for rpm in rpm_list]
-  return {"rpm_list": rpm_list}
 
-@app.route("/download_waterfall/<format>", methods=["GET", "POST"])
-def download_waterfall(format):
-  if format != "plt" and format != "csv":
-    abort(404)
-  else:
-    inputs = request.get_json()
-    opts = make_synthesis_opts(inputs)
-    if not database_exists():
-      return json.dumps({"status": "nodata", "data": ""})
+const createAVLAccelTuningSliders = function(){
+  const generator = new SliderGenerator("AVLAcc", "tuning-slider-region", "A");
+  
+  generator.setSliderIdCreator((baseId, rowIdx, colIdx) => {
+    return baseId + "-" + colIdx;
+  });
+  
+  generator.setSliderClassCreator((baseClass, rowIdx, colIdx) => {
+    return [baseClass];
+  });
+  
+  generator.setSliderLabelCreator((baseLabel, rowIdx, colIdx) => {
+    return baseLabel + colIdx + "[" + "\xB1" + "50%]: ";
+  });
+  
+  const sliders = generator.createPanelSliders(1, NUM_MOUNTS);
+  
+  sliders.find("input[type='range']").on("change", (e)=>{
+    self = e.currentTarget;
+    const indicator = $("#num" + capitalizeFirstLetter(self.id));
+    indicator.val(self.value);
+//    updateGraph();
+  });
+  $("#mount-avl").empty();
+  $("#mount-avl").append(sliders.children());
+  console.log("mount-avl");    
+  console.log($("#mount-avl"));  
+}
 
-    try:
-      opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
-      waterfall_creator = SynthesisUtility(opts)
-      if format == "plt":
-        data = waterfall_creator.generate_plt_data()
-      else:
-        data = waterfall_creator.generate_csv_waterfall_data()
-      return json.dumps({"status": "ok", "data": data})
-    except Exception as err:
-      err_msg = type(err).__name__  + ": " + str(err)
-      print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
-      data = type(err).__name__  + ": " + str(err) + "".join(traceback.format_tb(err.__traceback__))
-      return json.dumps({"status": "error", "data": data})
 
-def make_synthesis_opts(inputs):
-    opts = SynthesisOptions(_LOAD_DB_PATH, no_cross=inputs["no_cross"], compute_contrib=inputs["compute_contrib"])
-    if inputs["no_rot"]:
-      opts.num_dofs = 3
-    if inputs["rpm"] is not None and len(inputs["rpm"]) > 3:
-      opts.rpm = int(inputs["rpm"][:-3])
-    
-    opts.response_id = int(inputs["response_id"]) if inputs["response_id"] else None
-    opts.target_resp_label = inputs["target_resp_label"]
-    opts.to_3rd_oct = inputs["oct3rd"]
-    opts.response_id, opts.response_dbname, opts.response_labels = get_response_db_n_labels(opts)
-    if opts.response_labels is not None and opts.target_resp_label not in opts.response_labels:
-      opts.target_resp_label = opts.response_labels[0]
-    if len(opts.response_labels) > 1:
-      opts.a_weight = False
-    else:
-      opts.a_weight = inputs["a_weight"]
-    
-    opts.set_tf_factors("avl_mount", inputs["avl_mount_factors"])
-    opts.set_tf_factors("engine_mount", inputs["engine_mount_factors"])
-    opts.set_tf_factors("body_mount", inputs["body_mount_factors"])
-    opts.set_tf_factors("body_target", inputs["body_target_factors"])
-    opts.set_tf_factors("mount", inputs["mount_factors"])
-    opts.to_db = inputs["show_db"]
-    opts.df = float(inputs["df"])
-    return opts
-    
-@app.route("/update_graph", methods=['GET', 'POST'])
-def update_graph():
-  global all_str
-  print("Start updating data")   
-  inputs = request.get_json()
-#  all_str = inputs.get('all_str', '')  
-#  print("update_graph_all_str")  
-#  print(all_str)
-  if inputs["no_cross"]:
-    request_display_type = "no_cross"
-  elif inputs["compute_contrib"]:
-    request_display_type = "compute_contrib"
-  else:
-    request_display_type = "full"
-
-  opts = make_synthesis_opts(inputs)
-
-  if not database_exists():
-    plotter = Plotter(opts)
-    graph_json = json.dumps({"status": True,
-                             "meta": {"resp_labels": [],
-                                      "update_resp_labels": True,
-                                      "num_mounts": opts.num_mounts},
-                             "data": plotter.figure}, cls=plotly.utils.PlotlyJSONEncoder)
-    return graph_json
-
-  try:
-    is_current_display_node = opts.response_id == sess.viewing_nid
-    
-    
-    if not is_current_display_node:
-      opts.target_resp_label = opts.response_labels[0]
-      
-    opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
-
-    synthesizer = Synthesizer(opts)
-    print("Start calculating Asyn")                    
-    Asyn, Atrue, _, _, freq = synthesizer.synthesize()
+const createEngineSideInertanceTuningSliders = function(){
+  const generator = new SliderGenerator("enMountH", "tuning-slider-region", "H");
+  
+  generator.setSliderIdCreator((baseId, rowIdx, colIdx) => {
+    return baseId + "-" + rowIdx + "-" + colIdx;
+  });
+  
+  generator.setSliderClassCreator((baseClass, rowIdx, colIdx) => {
+    if (colIdx != rowIdx)
+      return [baseClass, "hidable"]
+    return [baseClass]
+  });
+  
+  generator.setSliderLabelCreator((baseLabel, rowIdx, colIdx) => {
+    return baseLabel + rowIdx + "-" + colIdx + "[" + "\xB1" + "50%]: ";
+  })
+  ;
+  const sliders = generator.createPanelSliders(NUM_MOUNTS, NUM_MOUNTS);
+  
+  sliders.find("input[type='range']").on("change", (e)=>{
+    self = e.currentTarget;
+    const indicator = $("#num" + capitalizeFirstLetter(self.id));
+    indicator.val(self.value);
+//    updateGraph();
+  });
+  $("#engine-side-mount").empty()
+  $("#engine-side-mount").append(sliders.children());
+  console.log("engine-side-mount");  
+  console.log($("#engine-side-mount"));
  
-    plot_row_heights = [400, 800, 300]
+}
 
-    opts.plot_row_height = plot_row_heights[int(inputs["chart_height"])]
-    is_current_display_type = request_display_type == sess.viewing_type["result_type"]
-    is_current_display_result_comp = opts.target_resp_label == sess.viewing_response_label
-    is_same_freq_interval = int(opts.df * 1e5) == int(sess.freq_interval * 1e5)
-    
-    sess.viewing_type["result_type"] = request_display_type
-    sess.viewing_nid = opts.response_id
-    sess.viewing_response_label = opts.target_resp_label
-    sess.freq_interval = opts.df
-#    print("result_type")    
-#    print(request_display_type)  
-    
-    if (not is_current_display_type or not is_current_display_node or not is_current_display_result_comp
-        or not is_same_freq_interval):
-      sess.history.clear()
-    sess.history.preserve(Asyn)
 
-    Asyn_history = None if not inputs["show_history"] else sess.history.pull()
-    plotter = Plotter(opts)
-
-    fig = plotter.generate_synthesis_plot(freq, Asyn, Atrue, Asyn_history)
-
-    if is_current_display_type and is_current_display_node:
-      invisible_groups = inputs["invisible_groups"]
-      for trace in fig.data:
-        if trace.legendgroup in invisible_groups:
-          trace.visible = "legendonly"
-      if is_current_display_result_comp:
-        fig.update_xaxes(range=inputs["zoom_range"]["xrange"])
-        if sess.viewing_type["dB"] == opts.to_db:
-          fig.update_yaxes(row=1, col=1, range=inputs["zoom_range"]["yrange"])
-
-    sess.viewing_type["dB"] = opts.to_db
-
-    graph_json = json.dumps({"status": True,
-                             "meta": {"resp_labels": opts.response_labels,
-                                      "update_resp_labels": not is_current_display_node,
-                                      "num_mounts": opts.num_mounts},
-                             "data": fig}, cls=plotly.utils.PlotlyJSONEncoder)
-  except Exception as err:
-    err_msg = type(err).__name__  + ": " + str(err) + "".join(traceback.format_tb(err.__traceback__))
-    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
-    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
-    return graph_json
-  return graph_json
+const createMountStiffnessTuningSliders = function(){
+  const generator = new SliderGenerator("mountK", "tuning-slider-region", "K");
   
-@app.route("/download_misc", methods=['GET', 'POST'])
-def download_misc_data():
-  inputs = request.get_json()
-  opts = make_synthesis_opts(inputs)
-  if not database_exists():
-    return json.dumps({"status": "nodata", "data": ""})
-  try:
-    opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
-    synthesizer = Synthesizer(opts)
-    _, _, rf, Aem, freq = synthesizer.synthesize()
-    
-    with open(os.path.join(app.config["RESPONSE_DIR"], "data.csv"), "w+", encoding="utf-8") as csv:
-      if inputs["request_name"] == "rf":
-        data = vector_to_csv(rf, freq, opts, vtype="force")
-      else:
-        data = vector_to_csv(Aem, freq, opts, vtype="accel")
-      data.to_csv(csv, line_terminator="\n")
-      csv.seek(0)
-      return json.dumps({"status": "ok", "data": csv.read()})
-  except Exception as err:
-    err_msg = type(err).__name__  + ": " + str(err)
-    print(err_msg)
-    return json.dumps({"status": "error", "data": err_msg})
-
-@app.route("/download", methods=['GET', 'POST'])
-def download_csv():
-  inputs = request.get_json()
-  opts = make_synthesis_opts(inputs)
-  if not database_exists():
-    return json.dumps({"status": "nodata", "data": ""})
-
-  Asyn_history = None if not inputs["show_history"] else sess.history.pull()
-  try:
-    opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
-    with open(os.path.join(app.config["RESPONSE_DIR"], "data.csv"), "w+", encoding="utf-8") as csv:
-      csv_generator = SynthesisUtility(opts)
-      data = csv_generator.to_dataframe(Asyn_history)
-      data.to_csv(csv, line_terminator="\n")
-      csv.seek(0)
-      return json.dumps({"status": "ok", "data": csv.read()})
-  except Exception as err:
-    err_msg = type(err).__name__  + ": " + str(err)
-    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
-    return json.dumps({"status": "error", "data": err_msg})
-    
-@app.route("/add_history", methods=['GET', 'POST'])
-def add_history():
-  inputs = request.get_json()
-  opts = SynthesisOptions(_LOAD_DB_PATH)
+  generator.setSliderIdCreator((baseId, rowIdx, colIdx) => {
+    return baseId + "-" + (FLEX_MOUNT_IDXS[rowIdx-1] + 1) + "-" + colIdx;
+  });
   
-  all_str = inputs.get('all_str', '')  
-
-  if not database_exists():
-    return {"status": "nodata"}
-  if inputs["signal"] == "add":
-    sess.history.add(inputs["name"])
-  return {"status": "ok"}
-
-@app.route("/load_db", methods=["POST"])
-def load_db():
-  files = request.files.getlist("file")
-  filenames = upload_files(files, "db", fix_filename=_DB_NAME)
-  shutil.copy(filenames[0], _LOAD_DB_PATH)
-  os.unlink(filenames[0])
-  global sess
-  sess = AppSession()
-  return {"status": True}
-
-@app.route("/clear_db", methods=["POST"])
-def clear_db():
-    delete_old_file()
-
-    inputs = request.get_json()
-    if inputs["signal"] == "clear" and os.path.exists(_LOAD_DB_PATH):
-        os.unlink(_LOAD_DB_PATH)
-    global sess
-    sess = AppSession()
-    return {"status": True}
-
-@app.route("/create_db", methods=["POST"])
-def create_db():
-  delete_old_file()    
-  sess.history.clear()  
+  generator.setSliderClassCreator((baseClass, rowIdx, colIdx) => {
+    return [baseClass];
+  });
   
-  k = int(request.form["BodySideType"])
+  generator.setSliderLabelCreator((baseLabel, rowIdx, colIdx) => {
+    const axisLabels = ["x", "y", "z"];
+    return baseLabel + (FLEX_MOUNT_IDXS[rowIdx-1] + 1) + axisLabels[colIdx - 1] + "[" + "\xB1" + "50%]: ";
+  });
+  
+  generator.setCheckboxBaseValues("linkedK", "content-centered", "linkedK");
+  
+  generator.setCheckboxIdCreator( (baseId, rowIdx) => {
+    return baseId + "-" + (FLEX_MOUNT_IDXS[rowIdx-1] + 1);
+  });
+  
+  generator.setCheckboxClassCreator( (baseClass, rowIdx) => {
+    return [baseClass];
+  });
+  
+  generator.setCheckboxLabelCreator( (baseLabel, rowIdx) => {
+    return baseLabel + (FLEX_MOUNT_IDXS[rowIdx-1] + 1);
+  });
+  
+  const sliders = generator.createPanelSliders(FLEX_MOUNT_IDXS.length, 3, true);
+  
+  $("#mount-stiffness").empty();
+  $("#mount-stiffness").append(sliders.children());
+  console.log("#mount-stiffness");    
+  console.log($("#mount-stiffness"));    
+}
 
-  k_mount = int(request.form["MountParaFile_yesno"])
 
-  if k==1 :
-    files = request.files.getlist("bodyPchFiles")
-    body_files_pch = upload_files(files, "body_upload_pch", fix_filename=None) 
-  if k==2 :
-    files = request.files.getlist("bodyPchFiles")
-    body_files_csv = upload_files(files, "body_upload_csv", fix_filename=None)
-    convert_csv(body_files_csv)
-    csv_file_path = current_path + "\\uploads\\body_csv\\"
-    # Lấy danh sách tên file/thư mục trong folder_path
-    items = os.listdir(csv_file_path)
-    # Tạo danh sách đường dẫn đầy đủ
-    body_files_csv_converted = [os.path.join(csv_file_path, item) for item in items]
+const createBodySideInertanceTuningSliders = function(){
+  const generator = new SliderGenerator("bodyMountH", "tuning-slider-region", "H");
+  
+  generator.setSliderIdCreator((baseId, rowIdx, colIdx) => {
+    return baseId + "-" + rowIdx + "-" + colIdx;
+  });
+  
+  generator.setSliderClassCreator((baseClass, rowIdx, colIdx) => {
+    if (colIdx != rowIdx)
+      return [baseClass, "hidable"]
+    return [baseClass]
+  });
+  
+  generator.setSliderLabelCreator((baseLabel, rowIdx, colIdx) => {
+    return baseLabel + rowIdx + "-" + colIdx + "[" + "\xB1" + "50%]: ";
+  })
+  ;
+  const sliders = generator.createPanelSliders(NUM_MOUNTS, NUM_MOUNTS);
+  
+  sliders.find("input[type='range']").on("change", (e)=>{
+    self = e.currentTarget;
+    const indicator = $("#num" + capitalizeFirstLetter(self.id));
+    indicator.val(self.value);
+//    updateGraph();
+  });
+  $("#body-side-mount").empty();
+  $("#body-side-mount").append(sliders.children());
+  console.log("#body-side-mount");    
+  console.log($("#body-side-mount"));   
+  
+}
+
+
+const createBodyTargetTuningSliders = function(){
+  const generator = new SliderGenerator("bodyTargetH", "tuning-slider-region", "H");
+  
+  generator.setSliderIdCreator((baseId, rowIdx, colIdx) => {
+    return baseId + "-" + colIdx;
+  });
+  
+  generator.setSliderClassCreator((baseClass, rowIdx, colIdx) => {
+    return [baseClass]
+  });
+  
+  generator.setSliderLabelCreator((baseLabel, rowIdx, colIdx) => {
+    return baseLabel + colIdx + "[" + "\xB1" + "50%]: ";
+  })
+  ;
+  const sliders = generator.createPanelSliders(1, NUM_MOUNTS);
+  
+  sliders.find("input[type='range']").on("change", (e)=>{
+    self = e.currentTarget;
+    const indicator = $("#num" + capitalizeFirstLetter(self.id));
+    indicator.val(self.value);
+//    updateGraph();
+  });
+  $("#body-target").empty();
+  $("#body-target").append(sliders.children());
+  console.log("body-target");    
+  console.log($("#body-target"));   
       
+  
+}
+
+
+const createTuningSliders = function(){
+  createAVLAccelTuningSliders();
+  createEngineSideInertanceTuningSliders();
+  createMountStiffnessTuningSliders();
+  createBodySideInertanceTuningSliders();
+  createBodyTargetTuningSliders();
+  for (let mountIdx of FLEX_MOUNT_IDXS) {
+    linkInputSliders(mountIdx + 1);
+  }
+}
+
+
+
+const saveMountParam = function(){
+  let execButton_mount = $("#btn-save-mp");
+  let fd_mount = new FormData();
+  let mountParams = getMountProperties();
+  fd_mount.append("mountParams", JSON.stringify(mountParams));
+  
+  $.ajax({
+    type: "POST",
+    url: "/save_mount_csv",
+    data: fd_mount,
+    contentType: false,
+    cache: false,
+    processData: false,
+    dataType: "json",
+    success: (response)=>{
+		let save_folder_info = response["save_folder"];
+		let filename_info = response["file_name"];		
+		if (!response["status"]) {
+		alert('Failed to save.');			
+		} else {
+		alert('Mount Parameter File was saved successfully!\nFile name: ' + filename_info + '\nFolder: ' + save_folder_info);
+		}
+    }
+  });  
+};
+
+function MountFile_Yesno(show) {
+    document.getElementById('mountFileContainer').style.display = show ? 'inline-block' : 'none';
+    document.getElementById('mount-param-panel').style.display = show ? 'none':'table' ;	
+    document.getElementById('btn-save-mp').style.display = show ? 'none':'table' ;		
+  }
+ 
+ 
+ 
+const onParamRowTrashBtnClicked = function(e){
+  const self = e.currentTarget;
+  const currentRow = $(self).parents(":eq(1)");
+  const isHeader = currentRow.prev().hasClass("header");
+  if (currentRow.is(":last-child") && isHeader)
+    return;
+  currentRow.remove();
+}
+
+
+const onParamFreqCellFocused = function(e){
+  const self = $(e.currentTarget);
+  const nextCells = self.parents(":eq(1)").find("td:not(:first-child)>input");
+  nextCells.each( (_, cell)=>{
+    if (!$(cell).val().trim())
+      $(cell).val(0);
+  });
+}
+
+
+const onParamRowInsertBtnClicked = function(e){
+  const self = e.currentTarget;
+  const currentRow = $(self).parents(":eq(1)");
+  currentRow.after(createUserInputParamRows().children());
+}
+
+
+const onKeydownAllowPositiveFloatNumber = function(e) {
+  if (e.keyCode == 109 || e.keyCode == 189){
+    e.preventDefault();
+  }
+  onKeydownAllowFloatNumber(e);
+}
+
+
+const onKeydownAllowPositiveIntNumber = function(e) {
+  if (e.keyCode == 109 || e.keyCode == 189){
+    e.preventDefault();
+  }
+  onKeydownAllowIntNumber(e);
+}
+
+
+const onKeydownAllowFloatNumber = function(e){
+  // Allow: backspace, delete, tab, escape, enter, +, -, and .
+  if ($.inArray(e.keyCode, [46, 8, 9, 27, 13, 190, 110, 189, 109, 187, 107]) !== -1 ||
+    // Allow: Ctrl+A
+    (e.keyCode == 65 && e.ctrlKey === true) || 
+    // Allow: home, end, left, right
+    (e.keyCode >= 35 && e.keyCode <= 39)) {
+    // let it happen, don't do anything
+    return;
+  }
+  // Ensure that it is a number and stop the keypress
+  if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
+    e.preventDefault();
+  }
+}
+
+
+const onKeydownAllowIntNumber = function(e){
+  if (e.keyCode == 190 || e.keyCode == 110) {
+    e.preventDefault();
+  }
+  onKeydownAllowFloatNumber(e);
+}
+
+
+const onParamPhaseCellTabKeydowned = function(e){
+  const self = e.currentTarget;
+  if (e.keyCode == 9 && !e.shiftKey) {
+    // create new row
+    const currentRow = $(self).parents(":eq(1)");
+    if (currentRow.is(":last-child")) {
+      e.preventDefault();
+      const paramRow = createUserInputParamRows();
+      const firstCell = paramRow.find("tr > td:first-child > input");
+      currentRow.after(paramRow.children());
+      firstCell.focus();
+    }
+  }
+}
+
+
+const createUserInputParamRows = function(numRows=1) {
+  const container = $("<div>");
+  for (let row = 0; row < numRows; row++) {
+    const paramRow = $('<tr class="data-row">');
+    for (let col=0; col < 3; col++)
+      paramRow.append('<td><input type="text"></td>');
+    
+    cellInsertAfter = $("<td>");
+    const btnInsertAfter = $("<span>");
+    btnInsertAfter.addClass("glyphicon glyphicon-chevron-down");
+    cellInsertAfter.append(btnInsertAfter);
+    
+    const btnRemoveRow = $("<span>");
+    btnRemoveRow.addClass("glyphicon glyphicon-trash");
+    const cellRemoveRow = $("<td>");
+    cellRemoveRow.append(btnRemoveRow);
+    
+    paramRow.append(cellInsertAfter);
+    paramRow.append(cellRemoveRow);
+    
+    btnRemoveRow.click(onParamRowTrashBtnClicked);
+    btnInsertAfter.click(onParamRowInsertBtnClicked);
+    container.append(paramRow);
+  }
+  
+  const phaseInputs = container.find("tr > td:nth-child(3) > input");
+  phaseInputs.on("keydown", onParamPhaseCellTabKeydowned);
+  
+  container.find("tr > td:first-child > input").on("keydown", onKeydownAllowPositiveFloatNumber);
+  
+  container.find("tr > td:not(:first-child) > input").on("keydown", onKeydownAllowFloatNumber);
+  
+  const freqInputs = container.find("tr > td:first-child > input");
+  freqInputs.on("focus", onParamFreqCellFocused);
+  
+  return container;
+}
+
+
+const createSingleUserDefinedMountParamTable = function(axisLabel, numRows=1, fileName="") {
+  let paramTable = $("<table>");
+  
+  paramTable.append("<caption>" + axisLabel + " Dynamic stiffness" + fileName + "</caption>");
+  
+  paramTable.append('<tr class="header"><th>Freq.</th><th>Real</th><th>Imag</th><th colspan="2"></th></tr>');
+  paramTable.append(createUserInputParamRows(numRows).children());
+  return paramTable;
+}
+
+
+const readParamsFromCsv = function(csvText){
+  const lines = csvText.split("\r\n");
+  const paramData = [];
+  for (let line of lines){
+    let lineItems = line.split(",")
+    if (lineItems.length != 3)
+      continue;
+
+    const paramLine = [];
+    lineItems.forEach((item) => {
+      paramLine.push(Number(item));
+    });
+    paramData.push(paramLine);
+  }
+  return paramData;
+}
+
+
+const onClearParamRowsBtnClicked = function(obj){
+  const outerDiv = $(obj.currentTarget).parent();
+  const table = outerDiv.prev("table");
+  const [axisLabel] = table.find("caption").text().split(" ", 1);
+  table.remove();
+  // table.append(createUserInputParamRows().children());
+  outerDiv.before(createSingleUserDefinedMountParamTable(axisLabel));
+}
+
+const onImportCsvParamBtnClicked = function(obj, btnInsertCsv){
+  const outerDiv = $(obj.currentTarget).parent();
+  const input = $("<input>");
+  const currentTable = outerDiv.prev();
+  const [axisLabel] = currentTable.find("caption").text().split(" ", 1);
+  input.attr("type", "file");
+  input.attr("accept", ".csv");
+  input.on("change", (e) => {
+    const [file] = input.prop("files");
+    
+    const reader = new FileReader();
+    reader.readAsText(file, "utf-8");
+    reader.onload = function(){
+      paramList = readParamsFromCsv(reader.result);
+      if (!paramList.length) return;
+      const numRows = paramList.length;
+      const table = createSingleUserDefinedMountParamTable(axisLabel, numRows, "___" + file.name );
+      const rows = table.find(".data-row");
+      rows.each( (rowIdx, row) => {
+        const inputs = $(row).find("input");
+        const rowParams = paramList[rowIdx]
+        inputs.each( (colIdx, input) => {
+          $(input).val(rowParams[colIdx]);
+        });
+      });
       
-  files = request.files.getlist("enPchFiles")
-  eng_files = upload_files(files, "engine", fix_filename=None)
+      currentTable.remove();
+      outerDiv.before(table);
+    };
+  });
+  input.click();
+}
+
+
+const createUserDefinedParamTableButtons = function() {
+  let btnClearRows = $("<button>");
+  btnClearRows.attr("name", "btn-clear-row")
+              .attr("value", "clearRows")
+              .text("Clear Rows");
   
-  files = request.files.getlist("avlFiles")
-  avl_files = upload_files(files, "avl", fix_filename=None)  
-  num_mounts = int(request.form["numMounts"])
-
-  model_name = request.form["modelName"]
+  btnClearRows.click(onClearParamRowsBtnClicked);
   
-  raw_post_data = request.form["loadAtFinish"]
-  load_at_finish = raw_post_data.lower() == "true"
-
-  raw_post_data = request.form["engMountIds"]
-  eng_mount_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
-
-  raw_post_data = request.form["bodyMountIds"]
-  body_mount_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
-
-  raw_post_data = request.form["avlMountIds"]
-  avl_mount_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
+  let btnInsertCsv = $("<button>");
+  btnInsertCsv.attr("name", "btn-insert-csv-params")
+              .attr("value", "addParamsFromCsv")
+              .text("Import Csv");
   
-  files = request.files.getlist("MountParamFiles")
-  mount_files = upload_files(files, "mount_parameter", fix_filename=None)
-  mount_files_str = ''.join(str(x) for x in mount_files)  
-  if k_mount==1 :
-    with open(mount_files_str, 'r', encoding='utf-8') as f:
-        mount_params = json.load(f)
-#    print("mount_params")     
-#    print(mount_params) 
-  if k_mount==2 :
-    raw_post_data = request.form["mountParams"]
-    mount_params = json.loads(raw_post_data)
+ //  btnInsertCsv.click(onImportCsvParamBtnClicked);
+
+  btnInsertCsv.click(function(event){
+    onImportCsvParamBtnClicked(event, btnInsertCsv);
+  });
 
 
-  raw_post_data = request.form["responseId"]
-  response_ids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
-
-  remarks = request.form["remarks"]
-
-  raw_post_data = request.form["engineAngles"]
-  engine_angles = list(map(lambda x: float(x.strip()), raw_post_data.split(",")))
-
-  opts = SynthesisOptions(_LOAD_DB_PATH)
-  if len(eng_mount_nids) != len(body_mount_nids) or len(eng_mount_nids) != len(avl_mount_nids) or len(eng_mount_nids) != num_mounts:
-    return {"status": False, "download_token": None}
-
-  node_ids = np.vstack([eng_mount_nids, body_mount_nids, avl_mount_nids]).astype(np.int64)
-
-
-  db_path = os.path.join(app.config['RESPONSE_DIR'], _DB_NAME)
-  if k==1 :
-    build_database_punch(db_path, num_mounts, model_name, eng_files[0], body_files_pch[0], avl_files,
-                 mount_params, node_ids, response_ids, engine_angles, remarks, "dynamic-stiffness")
-  if k==2 :                 
-    build_database_csv(db_path, num_mounts, model_name, eng_files[0], body_files_csv_converted, avl_files,
-                 mount_params, node_ids, response_ids, engine_angles, remarks, "dynamic-stiffness")
-
-  if load_at_finish:
-    shutil.copy(db_path, _LOAD_DB_PATH)
-
-
-  download_token = str(int(time.time()))
-  app.config["DOWNLOAD_TOKEN"] = download_token
-  return {"status": True, "downloadToken": download_token}
-#  return {"status": True}
-
-@app.route("/get_db_info", methods=["POST", "GET"])
-def get_db_info():
-  opts = SynthesisOptions(_LOAD_DB_PATH)
-  dbinfo = {"model_name": "",
-            "num_mounts": 3,
-            "eng_pch": None,
-            "body_pch": None,
-            "engine_angles": [],
-            "response_id": [],
-            "avl_nids": [],
-            "eng_nids": [],
-            "body_nids": [],
-            "rpm_list": [],
-            "mount_params": {},
-            "remarks": "",
-            "mount_param_type": "kelvin-voigt",
-            "flex_mount_idxs": []
-            }
-  if not database_exists():
-    return json.dumps({"status": "nodata", "data": dbinfo})
-
-  with h5py.File(opts.database, "r") as db:
-    if "model_name" in db.attrs:
-      dbinfo["model_name"] = escape(db.attrs["model_name"])
-
-    if "eng_pch" in db.attrs:
-      dbinfo["eng_pch"] = escape(db.attrs["eng_pch"])
-
-    if "body_pch" in db.attrs:
-      dbinfo["body_pch"] = escape(db.attrs["body_pch"])
-
-    if "response_id" in db.attrs:
-      if db.attrs["response_id"].size == 1:
-        dbinfo["response_id"] = [db.attrs["response_id"].item()]
-      else:
-        dbinfo["response_id"] = db.attrs["response_id"].tolist()
-
-    if "num_mounts" in db.attrs:
-      dbinfo["num_mounts"] = db.attrs["num_mounts"].item()
-
-    db_response_ids = {"response_id_aco": [],
-                       "response_id_eng": [],
-                       "response_id_body": []}
-
-    for keyname in db_response_ids.keys():
-      attr_name = "response_id" if keyname == "response_id_aco" else keyname
-      if attr_name in db.attrs:
-        if isinstance(db.attrs[attr_name], np.int64) and db.attrs[attr_name].size == 1:
-          db_response_ids[keyname] = [db.attrs[attr_name].item()]
-        elif isinstance(db.attrs[attr_name], np.ndarray):
-          db_response_ids[keyname] = db.attrs[attr_name].tolist()
-
-    dbinfo["response_id"] = (db_response_ids["response_id_aco"] + db_response_ids["response_id_eng"] + db_response_ids["response_id_body"])
-
-    if "engine_angles" in db.attrs:
-      dbinfo["engine_angles"] = db.attrs["engine_angles"].tolist()
-
-    if "remarks" in db.attrs:
-      dbinfo["remarks"] = escape(db.attrs["remarks"])
-
-    dbinfo["eng_nids"] = db["/NODE_IDS"]["eng_nids"][:].tolist()
-    dbinfo["body_nids"] = db["/NODE_IDS"]["body_nids"][:].tolist()
-    
-    avl_nids = db["/NODE_IDS"]["avl_nids"][:].tolist()
-    dbinfo["avl_nids"] = avl_nids
-
-    rpm_list = [int(rpm[:-3]) for rpm in db["/AVLMount"].keys()]
-    rpm_list.sort()
-    dbinfo["rpm_list"] = rpm_list
-
-    if "mount_param_type" in db.attrs:
-      dbinfo["mount_param_type"] = db.attrs["mount_param_type"]
-
-    mount_params = dbinfo["mount_params"]
-    flex_mount_idxs = []
-    if dbinfo["mount_param_type"] == "kelvin-voigt":
-      dbmount = db["/MOUNT_PARAMS"]
-      for nid in avl_nids:
-        mount_params[nid] = {
-                "sls": {"c1": dbmount[f"{nid}.sls.c1"][0].item(),
-                        "c2": dbmount[f"{nid}.sls.c2"][0].item(),
-                        "d1": dbmount[f"{nid}.sls.d1"][0].item()
-                        },
-                "ftab": {"kx": dbmount[f"{nid}.ftab.kx"][0].item(),
-                         "ky": dbmount[f"{nid}.ftab.ky"][0].item(),
-                         "kz": dbmount[f"{nid}.ftab.kz"][0].item(),
-                         }
-            }
-      flex_mount_idxs = [idx for idx in range(len(avl_nids))]
-    else:
-      axis_labels = ("TX", "TY", "TZ", "RX", "RY", "RZ")
-      for idx, nid in enumerate(avl_nids):
-        mount_group = f"/MountParams/n{nid}"
-        group = db[mount_group]
-        if group.attrs["mount_type"] == "rigid":
-          mount_params[nid] = {"mount_type": "rigid",
-                               "matrix_type": "none",
-                               "fixed_in_excite": True,
-                               "dyn_stiffness": {}}
-        else:
-          flex_mount_idxs.append(idx)
-          mount_params[nid] = {"mount_type": "flexible",
-                               "matrix_type": group.attrs.get("matrix_type", "symm"),
-                               "fixed_in_excite": bool(group.attrs.get("fixed_in_excite", True)),
-                               "dyn_stiffness": {}}
-          dyn_stiffness = mount_params[nid]["dyn_stiffness"] 
-          for _, target_axis_label in enumerate(axis_labels):
-            for _, source_axis_label in enumerate(axis_labels):
-              dset_name = f"{target_axis_label}-{source_axis_label}"
-              if dset_name not in group:
-                continue
-              dbmount = group[dset_name]
-              dyn_stiffness[dset_name] = dbmount[:].tolist()
-    dbinfo["flex_mount_idxs"] = flex_mount_idxs
-  return json.dumps({"status": "ok", "data": dbinfo})
-
-@app.route("/download/<mode>/<download_token>")
-def download_db(mode, download_token):
-  if mode == "creation":
-    path = _BUILT_DB_PATH
-  elif mode == "backup":
-    path = _LOAD_DB_PATH
-  else:
-    app.config["DOWNLOAD_TOKEN"] = None
-    abort(404)
-
-  if os.path.exists(path) and download_token == app.config["DOWNLOAD_TOKEN"]:
-    app.config["DOWNLOAD_TOKEN"] = None
-    return send_from_directory(os.path.dirname(path), _DB_NAME, as_attachment=True)
-  else:
-    app.config["DOWNLOAD_TOKEN"] = None
-    abort(404)
-
-@app.route("/backup_db", methods=["POST"])
-def backup_db():
-  inputs = request.get_json()
-  if inputs["signal"] != "backup":
-    return json.dumps({"status": "wrong-signal", "downloadToken": None})
-            
-  if os.path.exists(_LOAD_DB_PATH):
-    download_token = str( int(time.time()) )
-    app.config["DOWNLOAD_TOKEN"] = download_token
-    return json.dumps({"status": "ok", "downloadToken": download_token})
+  let btnRemoveTable = $("<button>");
+  btnRemoveTable.attr("name", "btn-remove-param-table")
+                .attr("value", "removeParamTable")
+                .text("Remove Table");
   
-  return json.dumps({"status": "nodata", "downloadToken": None})
+  btnRemoveTable.click(onRemoveParamTableClicked);
 
-@app.route("/download_csv/<download_token>")
-def download_csv_token(download_token):
-    file_path = app.config.get("DOWNLOAD_FILE_PATH")
-    file_name = app.config.get("DOWNLOAD_FILE_NAME")
-
-    if file_path and file_name and os.path.exists(file_path) and download_token == app.config.get("DOWNLOAD_TOKEN"):
-        # Xóa token sau khi dùng để tránh tải lại
-        app.config["DOWNLOAD_TOKEN"] = None
-        return send_from_directory(os.path.dirname(file_path), file_name, as_attachment=True)
-    else:
-        app.config["DOWNLOAD_TOKEN"] = None
-        abort(404)    
-
-@app.route("/backup_csv", methods=["POST"])
-def backup_csv():
-    data = request.get_json()
-    file_path = data.get("path")
-    csv_name = data.get("filename")
-        
-    if not file_path or not csv_name:
-        return json.dumps({"status": "nodata", "downloadToken": None})
-
-
-
-    if os.path.exists(file_path):
-        print("accessed")
-        download_token = str(int(time.time()))
-        print("download_token:", download_token)
-        app.config["DOWNLOAD_TOKEN"] = download_token
-        # Lưu đường dẫn và tên file vào config để dùng khi download
-        app.config["DOWNLOAD_FILE_PATH"] = file_path
-        app.config["DOWNLOAD_FILE_NAME"] = csv_name
-
-        return json.dumps({"status": "ok", "downloadToken": download_token})
-
-    return json.dumps({"status": "nodata", "downloadToken": None})
-
-def upload_files(files, subdir=None, fix_filename=None):
-  filenames = []
-  upload_dir = app.config['UPLOAD_DIR']
-  if subdir is not None:
-    upload_dir = os.path.join(upload_dir, subdir)
-    if not os.path.exists(upload_dir):
-      os.makedirs(upload_dir, exist_ok=True)
-
-  for file in files:
-    save_to = os.path.join(upload_dir, fix_filename if fix_filename is not None else file.filename)
-    file.save(save_to)
-    filenames.append(save_to)
-  return filenames
-
-def open_browser():
-  webbrowser.open_new("http://127.0.0.1:5000")
-
-def safe_float(x):
-    try:
-        return float(x)
-    except:
-        return 0.0  # hoặc np.nan hoặc giá trị mặc định bạn muốn
-
-@app.route("/updateGraph_Mount_Acce_Excite_sensitive", methods=['GET', 'POST'])
-def updateGraph_Mount_Acce_Excite_sensitive():
-  print("Start updateGraph_Mount_Acce_Excite_sensitive")
-  global all_str
-  inputs = request.get_json()
-#  all_str = inputs.get('all_str', '')  
-#  print("update_graph_all_str")  
-#  print(all_str)
-
-  opts = make_synthesis_opts(inputs)
-
-  try:
-    plotter = Plotter(opts)
-    is_current_display_node = opts.response_id == sess.viewing_nid
-
-    if not is_current_display_node:
-      opts.target_resp_label = opts.response_labels[0]
-
-    opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
-    value = inputs["response_allAcousticNodeID"]  
-    node_ids = [int(x.strip()) for x in value.split(',')]
-    mount_number = inputs["mount_num"]
  
-        
-    for node_id in node_ids:
-        opts.response_id = node_id
-        synthesizer = Synthesizer(opts)        
-        k_values = [ 1.0, 0.8, 1.2, 1.5, 0.5] 
-        print("Percent -50 -20 0 20 50 ")        
-        count = 1
-        for k in k_values:
-            if k != 1.0:
-                for a in range(5):  
-                    response_id = str(opts.response_id)
-                    input_file = os.path.join(current_path, "templates", "0_base_p(0)_template.csv")
-                    output_file = os.path.join(
-                        current_path,
-                        "Sensitive",
-                        f"{count}_A{a+1}_p({int(round((k-1)*100))})_{response_id}.csv"
-                    )
-                    shutil.copyfile(input_file, output_file)
-                    count = count + 1  
-        count = 0
-        for k in k_values:  
-            if k == 1.0: 
-                csv_file =  "0_base_p(0)_"+ str(opts.response_id) + ".csv"
-                print("Start calculating "+ csv_file)                   
-                Asyn, Atrue, _, _, freq = synthesizer.synthesize_mount_acce_Excite_sensitive(0, k)
-                with open(os.path.join(os.path.join(wrkdir, "Sensitive"), csv_file), "w+", encoding="utf-8") as csv:
-                  csv_generator = SynthesisUtility(opts)
-                  data = csv_generator.to_dataframe_sensitive(Asyn,freq)
-                  data.to_csv(csv, line_terminator="\n")
-                  csv.seek(0)
-                print("Finished exporting file " + csv_file)                  
-                count=count +1
-                 
-            if k != 1.0:
-                for a in range(5):
-                    if a < int(mount_number):
-                        csv_file = str(count) + "_A" + str(a+1) + "_p(" + str(int(round((k-1)*100))) + ")_"+ str(opts.response_id) + ".csv"
-                        print("Start calculating "+ csv_file)
-                        Asyn, Atrue, _, _, freq = synthesizer.synthesize_mount_acce_Excite_sensitive(a, k)                    
-                        with open(os.path.join(os.path.join(wrkdir, "Sensitive"), csv_file), "w+", encoding="utf-8") as csv:
-                          csv_generator = SynthesisUtility(opts)
-                          data = csv_generator.to_dataframe_sensitive(Asyn,freq)
-                          data.to_csv(csv, line_terminator="\n")
-                          csv.seek(0)
-                        print("Finished exporting file " + csv_file)                     
-                    count=count +1                    
-            graph_json = json.dumps({"status": True,
-                                     "meta": {"resp_labels": opts.response_labels,
-                                              "update_resp_labels": not is_current_display_node,
-                                              "num_mounts": opts.num_mounts},
-                                     "data": plotter.figure}, cls=plotly.utils.PlotlyJSONEncoder)             
-        check_column()  
-        create_sensitive_file("Mount_acce_excite", node_id, int(mount_number))
-  except Exception as err:
-    err_msg = type(err).__name__  + ": " + str(err)
-    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
-    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
-    return graph_json
-   
-  return graph_json  
-
-def check_column():
-    folder_path = os.path.join(wrkdir, "Sensitive")
-    csv_files = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
-    dfs = []
-    print("Check_column__")    
-    for file in csv_files:
-        file_path = os.path.join(folder_path, file)
-        df = pd.read_csv(file_path)
-        num_cols = df.shape[1]
-        if num_cols < 8:
-            new_csv_file = os.path.splitext(file_path)[0] +"_new.csv"
-            # Tạo tên cột mới theo vị trí (nếu không có tên cụ thể)
-            for i in range(num_cols + 1, 9):  # từ cột thứ 5 đến 6
-                col_name = f'Col{i}'
-                df[col_name] = 0
-            # Lưu lại file csv
-            df.to_csv(new_csv_file, index=False)  
-            os.remove(file_path)
-            
-@app.route("/updateGraph_Body_sensitive", methods=['GET', 'POST'])
-def updateGraph_Body_sensitive():
-  global all_str
-  inputs = request.get_json()
-#  all_str = inputs.get('all_str', '')  
-#  print("update_graph_all_str")  
-#  print(all_str)
-
-  request_display_type = "compute_contrib"
-  opts = make_synthesis_opts(inputs)
-
-  try:
-    plotter = Plotter(opts)
-    is_current_display_node = opts.response_id == sess.viewing_nid
-
-    if not is_current_display_node:
-      opts.target_resp_label = opts.response_labels[0]
-
-    opts.ref_level = float(inputs["acce_reflevel"]) if len(opts.response_labels) > 1 else float(inputs["pres_reflevel"])
-    value = inputs["response_allAcousticNodeID"]  
-    node_ids = [int(x.strip()) for x in value.split(',')]
-
-    mount_number = inputs["mount_num"]
- 
-        
-    for node_id in node_ids:
-        opts.response_id = node_id
-        synthesizer = Synthesizer(opts)        
-        k_values = [ 1.0, 0.8, 1.2, 1.5, 0.5] 
-        print("Percent -50 -20 0 20 50 ")        
-        count = 1
-        for k in k_values:
-            if k != 1.0:
-                for a in range(5):  
-                    response_id = str(opts.response_id)
-                    input_file = os.path.join(current_path, "templates", "0_base_p(0)_template.csv")
-                    output_file = os.path.join(
-                        current_path,
-                        "Sensitive",
-                        f"{count}_A{a+1}_p({int(round((k-1)*100))})_{response_id}.csv"
-                    )
-                    shutil.copyfile(input_file, output_file)
-                    count = count + 1  
-        count = 0
-        for k in k_values:  
-            if k == 1.0: 
-                csv_file =  "0_base_p(0)_"+ str(opts.response_id) + ".csv"
-                print("Start calculating "+ csv_file)                   
-                Asyn, Atrue, _, _, freq = synthesizer.synthesize_Body_sensitive(0, k)
-                with open(os.path.join(os.path.join(wrkdir, "Sensitive"), csv_file), "w+", encoding="utf-8") as csv:
-                  csv_generator = SynthesisUtility(opts)
-                  data = csv_generator.to_dataframe_sensitive(Asyn,freq)
-                  data.to_csv(csv, line_terminator="\n")
-                  csv.seek(0)
-                print("Finished exporting file " + csv_file)                  
-                count=count +1
-                 
-            if k != 1.0:
-                for a in range(5):
-                    if a < int(mount_number):
-                        csv_file = str(count) + "_A" + str(a+1) + "_p(" + str(int(round((k-1)*100))) + ")_"+ str(opts.response_id) + ".csv"
-                        print("Start calculating "+ csv_file)
-                        Asyn, Atrue, _, _, freq = synthesizer.synthesize_Body_sensitive(a, k)                    
-                        with open(os.path.join(os.path.join(wrkdir, "Sensitive"), csv_file), "w+", encoding="utf-8") as csv:
-                          csv_generator = SynthesisUtility(opts)
-                          data = csv_generator.to_dataframe_sensitive(Asyn,freq)
-                          data.to_csv(csv, line_terminator="\n")
-                          csv.seek(0)
-                        print("Finished exporting file " + csv_file)                     
-                    count=count +1                    
-            graph_json = json.dumps({"status": True,
-                                     "meta": {"resp_labels": opts.response_labels,
-                                              "update_resp_labels": not is_current_display_node,
-                                              "num_mounts": opts.num_mounts},
-                                     "data": plotter.figure}, cls=plotly.utils.PlotlyJSONEncoder)             
-        check_column()  
-        create_sensitive_file("Mount_acce_excite", node_id, int(mount_number))
-
-
-
-  except Exception as err:
-    err_msg = type(err).__name__  + ": " + str(err)
-    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
-    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
-    return graph_json
-   
-  return graph_json  
-
+  btnClearRows.click(function(event){
+    console.log("Clear Rows clicked");
+    onClearParamRowsBtnClicked(event);
+    btnInsertCsv.text("Import Csv");
+    console.log("Label reset");
+  });
   
-def create_sensitive_file(PreFilename, node_id, mount_number):
-    import re
-    folder_path = os.path.join(wrkdir, "Sensitive")
-    csv_files = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
-    def extract_leading_number(filename):
-        match = re.match(r'^(\d+)', filename)
-        if match:
-            return int(match.group(1))
-        else:
-            return float('inf')  # nếu không tìm thấy số, cho lên cuối
-    csv_files_sorted = sorted(csv_files, key=extract_leading_number)
-
-    dfs = []
-    for file in csv_files_sorted:
-        file_path = os.path.join(folder_path, file)
-        df = pd.read_csv(file_path)
-        # Xóa cột đầu tiên (theo vị trí)
-        df = df.iloc[:, 1:]
-        dfs.append(df)
+  let container = $('<div class="param-table-btns">');
+  container.append(btnClearRows);
+  container.append(btnInsertCsv);
+  container.append(btnRemoveTable)
+  return container;
+}
 
 
+const updateParamTableLayout = function(mountParamContainer){
+  const addedMountParamTables = mountParamContainer.find("div.mount-param-div");
+  const mountParamRows = mountParamContainer.find("div.single-mount-param-row");
 
-    result = pd.concat(dfs, axis=1, ignore_index=False)
+  const NUM_TABLES_PER_ROW = 3;
+  let currentWorkingMountParamRow;
+  for (let idx = 0; idx < addedMountParamTables.length; idx++){
+    if (idx % NUM_TABLES_PER_ROW == 0){
+      currentWorkingMountParamRow = $('<div class="single-mount-param-row">');
+      mountParamContainer.append(currentWorkingMountParamRow);
+    }
+    currentWorkingMountParamRow.append(addedMountParamTables.eq(idx));
+  }
+  if (mountParamRows.length)
+    mountParamRows.remove();
 
-
-    merged_file = current_path + "\\Sensitive\\merged_"+ str(node_id) +".csv"	
-    result.to_csv(merged_file, index=False)
-    template_file = current_path + "\\templates\\Mount_sensitive_template.xlsm"
-    sensitive_file = current_path + "\\Sensitive\\" + PreFilename +"_Sensitive_"+ str(node_id) +".xlsm"	
-    df = pd.read_csv(merged_file)
-
-    excel = win32.DispatchEx('Excel.Application')
-    excel.Visible = False  # ẩn Excel khi chạy
-
-
-    wb = excel.Workbooks.Open(os.path.abspath(template_file))
-    ws = wb.Sheets("Data_TFS_Export")
-
-    data = df.values.tolist()
-
-    start_row = 2
-    start_col = 2  # cột B
-
-    def col_num_to_letter(n):
-        string = ""
-        while n > 0:
-            n, remainder = divmod(n - 1, 26)
-            string = chr(65 + remainder) + string
-        return string
-
-    end_row = start_row + len(data) - 1
-    end_col = start_col + len(data[0]) - 1
-
-    start_cell = f"{col_num_to_letter(start_col)}{start_row}"
-    end_cell = f"{col_num_to_letter(end_col)}{end_row}"
-    write_range = f"{start_cell}:{end_cell}"
-
-    ws.Range(write_range).Value = data
+}
 
 
+const onRemoveParamTableClicked = function(e){
+  const self = $(e.currentTarget);
+  const paramTableDiv = self.parents(":eq(1)");
+  const paramTableRowDiv = paramTableDiv.parent();
+  const mountParamContainer = paramTableRowDiv.parent();
+  const matrixTermSelector = mountParamContainer.prev().find("select");
+  let needUpdateLayout = false;
+  let isOnlyChildOfLastRow = false;
+
+  if (!paramTableRowDiv.is(":last-child"))
+    needUpdateLayout = true;
+  else if (paramTableDiv.is(":last-child") && paramTableDiv.is(":first-child"))
+    isOnlyChildOfLastRow = true;
     
-    if mount_number == 3:    
-        excel.Application.Run("mount_3")  
-    if mount_number == 5:    
-        excel.Application.Run("mount_5") 
-        
-    # Chạy macro RefreshPivotTable
-    excel.Application.Run("RefreshPivotTable")
+  paramTableDiv.remove();
+  if (isOnlyChildOfLastRow)
+    paramTableRowDiv.remove();
+
+  updateStiffnessMatrixTermSelector(matrixTermSelector);
+  if (needUpdateLayout){
+    updateParamTableLayout(mountParamContainer);
+  }
+}
+
+
+const createDefaultUserDefinedMountParamTables = function(){
+  const container = $("<div>");
+  for (let dir of ["txtx", "tyty", "tztz"]) {
+    const paramTableContainer = $("<div>");
+    const tableLabel = (dir.slice(0, 2) + dir.slice(3)).toUpperCase();
+    paramTableContainer.addClass(dir + "-dyn-stiffness")
+                       .addClass("mount-param-div")
+                       .attr("matrix-term", tableLabel);
+    paramTableContainer.append(createSingleUserDefinedMountParamTable(tableLabel));
     
-    wb.SaveAs(os.path.abspath(sensitive_file))
-    wb.Close()
-    os.remove(merged_file)
-    for file_name in csv_files:
-        file_path = os.path.join(folder_path, file_name)
-        if os.path.isfile(file_path):
-            os.remove(file_path)
+    const paramTableBtns = createUserDefinedParamTableButtons();
+    paramTableContainer.append(paramTableBtns);
+    container.append(paramTableContainer);
+  }
+  return container;
+}
 
 
+const onMountTypeSelection = function(obj){
+  const self = $(obj.currentTarget);
+  if ( self.find(":selected").text().toLowerCase() == "rigid" ){
+    // self.nextAll("div").remove();
+    self.parent().next().remove(); // remove the checkbox Fixed in EXCITE
+    self.parents(":eq(1)").nextAll().children().remove() // remove following div content
+  } else {
+    // self.after(createMountParamTables().children());
+    const idx = self.parents(":eq(2)").attr("id").split("-").slice(-1);
+    self.parent().after(createFixFlexMountCheckbox(parseInt(idx)));
+    const singleMountContainer = self.parents(":eq(1)");
+    singleMountContainer.next().append(createMountStiffMatrixTypeRadioBtns(idx).children());
+    singleMountContainer.nextAll(":eq(1)").append(createDefaultUserDefinedMountParamTables().children())
+  }
+}
 
 
-            
-############## Blocked Force ############################
-current_path = os.getcwd()
+const createFixFlexMountCheckbox = function(idx){
+  const fixCheckboxDiv = $('<div class="fix-checkbox-container">')
+  const checkbox = $('<input type="checkbox" id="fix-excite-' + idx + '" checked>');
+  const checkboxLabel = $('<label for="fix-excite-' + idx + '">Fixed in EXCITE</label>');
+  fixCheckboxDiv.append(checkbox);
+  fixCheckboxDiv.append(checkboxLabel);
+  return fixCheckboxDiv;
+}
 
-@app.route("/init_graph_BlockedForce", methods=["POST"])
-def init_graph_BlockedForce():
-  global sess
-  delete_folder_file(current_path + "\\BlockedForce\\")
-  delete_folder_file(current_path + "\\BlockedForce\\BlockedForce_Output\\")  
-  opts = SynthesisOptions(_LOAD_DB_PATH)
-  opts.response_id, opts.response_dbname, opts.response_labels = get_response_db_n_labels(opts)
-  if len(opts.response_labels) > 1:
-    opts.a_weight = False
-  opts.target_resp_label = opts.response_labels[0]
-  pres_reflevel, acce_reflevel = _DEFAULT_PRES_REFLEVEL, _DEFAULT_ACCE_REFLEVEL
-  opts.ref_level = acce_reflevel if len(opts.response_labels) > 1 else pres_reflevel
-  opts.df = 1.0
-  if not database_exists():
-    plotter = Plotter(opts)
-    graph_json = json.dumps({"status": True,
-                             "meta": {"resp_labels": opts.response_labels,
-                                      "update_resp_labels": True,
-                                      "num_mounts": opts.num_mounts},
-                             "data": plotter.figure}, cls=plotly.utils.PlotlyJSONEncoder)
-    return graph_json
+
+const insertMountPanels = function() {
+  let container = $("#mount-param-panel");
+
+  for (let idx = 1; idx <= BUILDER_NUM_MOUNTS; idx++) {
+    const singleMountContainer = $("<div>");
+    singleMountContainer.attr("id", "mount-param-sub-panel-" + idx);
+    singleMountContainer.addClass("mount-param-sub-panel");
+    singleMountContainer.addClass("panel-" + idx);
+    //mountParaMagnel.append('<div class="mount-title">Mount #' + idx + '</div>');
+    const panelCollapseBtn = $("<button>");
+    panelCollapseBtn.attr("type", "button")
+                    .addClass("collapsible")
+                    .html("<span>Mount #" + idx + "</span>");
+    singleMountContainer.append(panelCollapseBtn);
+    const mountParamContainer = $('<div class="single-mount-param-container">');
+    const mountParamRow = $('<div class="single-mount-param-row">');
+    const mountTypeSelectionDiv = $('<div class="mount-type-selector">');
+    // mountTypeSelectionDiv.append("<label>Type</label>");
+    const typeSelector = $("<select>");
+    typeSelector.attr("name", "cbx-mount-type")
+                .attr("class", "cbx-mount-type")
+                .attr("readOnly", "");
+    typeSelector.append('<option value="flexible">Flexible</option>');
+    typeSelector.append('<option value="rigid">Rigid</option>');
+    mountTypeSelectionDiv.append(typeSelector);
+    panelCollapseBtn.append(mountTypeSelectionDiv);
+    panelCollapseBtn.append(createFixFlexMountCheckbox(idx));
+    
+    const mountStiffMatrixTypeOptionContainer = $("<div>");
+    mountStiffMatrixTypeOptionContainer.addClass("mount-stiff-matrix-type-opts-container");
+    mountStiffMatrixTypeOptionContainer.append(createMountStiffMatrixTypeRadioBtns(idx).children());
+    singleMountContainer.append(mountStiffMatrixTypeOptionContainer);
+
+    mountParamRow.append(createDefaultUserDefinedMountParamTables().children());
+    mountParamContainer.append(mountParamRow);
+    singleMountContainer.append(mountParamContainer);
+    container.append(singleMountContainer);
+
+    typeSelector.on("change", onMountTypeSelection);
+    panelCollapseBtn.click(onUserDefinedMountPanelExpansionBtnClicked);
+    mountParamContainer.hide();
+    mountStiffMatrixTypeOptionContainer.hide();
+  }
+}
+
+
+const createMountStiffnessMatrixTermOptions = function(skipList=null, matrixType="symm"){
+  const matrixTermsByMatrixType = {
+    symm: {
+      translationTerms: {
+        label: "Translational Stiffness Terms",
+        terms: ["TXX", "TYY", "TZZ", "TXY", "TXZ", "TYZ"]
+      },
+      rotationTerms: {
+        label: "Rotational Stiffness Terms",
+        terms: ["RXX", "RYY", "RZZ", "RXY", "RXZ", "RYZ"]
+      },
+      translationRotationTerms: {
+        label: "Translation-Rotational Stiffness Terms",
+        terms: ["TX-RX", "TX-RY", "TX-RZ", "TY-RX", "TY-RX", "TY-RY", "TY-RZ", "TZ-RX", "TZ-RY", "TZ-RZ"]
+      }
+    },
+    unsymm: {
+      translationTerms: {
+        label: "Translational Stiffness Terms",
+        terms: ["TXX", "TYY", "TZZ", "TXY", "TXZ", "TYZ", "TYX", "TZX", "TZY"]
+      },
+      rotationTerms: {
+        label: "Rotational Stiffness Terms",
+        terms: ["RXX", "RYY", "RZZ", "RXY", "RXZ", "RYZ", "RYX", "RZX", "RXY"]
+      },
+      translationRotationTerms: {
+        label: "Translation-Rotational Stiffness Terms",
+        terms: ["TX-RX", "TX-RY", "TX-RZ", "TY-RX", "TY-RX", "TY-RY", "TY-RZ", "TZ-RX", "TZ-RY", "TZ-RZ"]
+      },
+      rotationTranslationTerms: {
+        label: "Rotation-Translational Stiffness Terms",
+        terms: ["RX-TX", "RX-TY", "RX-TZ", "RY-TX", "RY-TX", "RY-TY", "RY-TZ", "RZ-TX", "RZ-RY", "RZ-TZ"]
+      }
+    }
+  }
+
+  const matrixTermGroupKeys = {
+    symm: ["translationTerms", "rotationTerms", "translationRotationTerms"],
+    unsymm: ["translationTerms", "rotationTerms", "translationRotationTerms", "rotationTranslationTerms"],
+  }
+  
+  const container = $("<div>");
+  const matrixTerms = matrixTermsByMatrixType[matrixType];
+
+  if (skipList !== null)
+    skipList = new Set(skipList);
+  
+  for (let termGroupKey of matrixTermGroupKeys[matrixType]) {
+    const termGroup = $("<optgroup>");
+    termGroup.attr("label", matrixTerms[termGroupKey].label);
+    for (let term of matrixTerms[termGroupKey].terms) {
+      if (skipList === null || skipList.has(term))
+        continue;
       
-  try:
-    synthesizer = Synthesizer(opts)
-    Asyn, Atrue, _, _, freq = synthesizer.synthesize()
+      termGroup.append('<option value="' + term + '">' + term + "</option>");
+    }
+    container.append(termGroup)
+  }
+  return container;
+}
+
+
+const createMountStiffMatrixTypeRadioBtns = function(mountIdx){
+  const container = $("<div>");
+  const symRadio = $("<input>");
+  symRadio.attr("type", "radio")
+          .attr("id", "mount-" + mountIdx + "-symmetric-stiffness-radio-btn")
+          .attr("name", "mount-" + mountIdx + "-symmetric-stiffness-options")
+          .attr("value", "Symmetric")
+          .attr("checked", "");
+  const symLabel = $('<label for="mount-' + mountIdx + "-symmetric-stiffness-radio-btn" + '">Symmetric</label>');
+  const unsymRadio = $("<input>");
+  unsymRadio.attr("type", "radio")
+          .attr("id", "mount-" + mountIdx + "-unsymmetric-stiffness-radio-btn")
+          .attr("name", "mount-" + mountIdx + "-symmetric-stiffness-options")
+          .attr("value", "Unsymmetric")
+  const unsymLabel = $('<label for="mount-' + mountIdx + "-unsymmetric-stiffness-radio-btn" + '">Unsymmetric</label>');
+
+  const stiffnessTermSelector = $("<select>");
+  stiffnessTermSelector.addClass("mount-" + mountIdx + "-stiffness-term-selector");
+  stiffnessTermSelector.append(createMountStiffnessMatrixTermOptions(["TXX", "TYY", "TZZ"], "symm").children());
+
+  const addParamTableButton = $("<button>Add Input Table</button>");
+  addParamTableButton.addClass("add-mount-param-input-table-btn")
+                     .attr("value", "add-mount-param-input-table");
   
-    
-    sess.history.preserve(Asyn)
-    plotter = Plotter(opts)
-    fig = plotter.generate_synthesis_plot(freq, Asyn, Atrue)
-    graph_json = json.dumps({"status": True,
-                             "meta": {"resp_labels": opts.response_labels,
-                                      "update_resp_labels": True,
-                                      "num_mounts": opts.num_mounts},
-                             "data": fig}, cls=plotly.utils.PlotlyJSONEncoder)
-    sess.viewing_nid = opts.response_id
-    sess.viewing_response_label = opts.target_resp_label
-  except Exception as err:
-    err_msg = type(err).__name__  + ": " + str(err)
-    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
-    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
+  container.append(symRadio);
+  container.append(symLabel);
+  container.append(unsymRadio);
+  container.append(unsymLabel);
+  container.append(stiffnessTermSelector);
+  container.append(addParamTableButton);
+  addParamTableButton.click(addParamTable);
+  symRadio.click((e)=>{updateStiffnessMatrixTermSelector(stiffnessTermSelector)});
+  unsymRadio.click((e)=>{updateStiffnessMatrixTermSelector(stiffnessTermSelector)});
+  return container;
+}
 
-  if opts.no_cross:
-    sess.viewing_type = {"result_type": "no_cross", "dB": opts.to_db}
-  elif opts.compute_contrib:
-    sess.viewing_type = {"result_type": "contrib", "dB": opts.to_db}
-  else:
-    sess.viewing_type = {"result_type": "full", "dB": opts.to_db}
-  return graph_json
+
+const getAddedParamTableList = function(mountParamContainer){
+  // mountParamContainer: the container that contains all param tables of the mount (single-mount-param-container)
+  const addedMountParamTables = mountParamContainer.find("div.mount-param-div");
+  const addedList = [];
+  addedMountParamTables.each((key, tableDiv) => {
+    addedList.push($(tableDiv).attr("matrix-term"));
+  });
+  return addedList;
+}
+
+
+const updateStiffnessMatrixTermSelector = function(cbxObj) {
+  // cbxObj: jquery object of the selector
+  const mountParamContainer = cbxObj.parent().next();
+  const addedList = getAddedParamTableList(mountParamContainer);
+  const matrixType = cbxObj.prevAll("input[type='radio']:checked").val().toLowerCase() == "symmetric" ? "symm" : "unsymm";
+  const selectorOpts = createMountStiffnessMatrixTermOptions(addedList, matrixType);
+  cbxObj.empty();
+  cbxObj.append(selectorOpts.children());
+}
+
+
+const addParamTable = function(e){
+  const NUM_TABLES_PER_ROW = 3;
+  const self = $(e.currentTarget);
+  const stiffnessTerm = self.prev().find(":selected").text();
+  const mountParamContainer = self.parent().next();
+  const numAddedMountParamTables = mountParamContainer.find("div.mount-param-div").length;
+  let mountParamRow = mountParamContainer.children().last();
+  if (numAddedMountParamTables % NUM_TABLES_PER_ROW == 0){ // all rows are full, add one more row
+    mountParamRow = $('<div class="single-mount-param-row">');
+    mountParamContainer.append(mountParamRow);
+  }
+
+  const paramTableContainer = $("<div>");
+  const tableClassName = stiffnessTerm.length == 3
+    ? stiffnessTerm.slice(0,2) + stiffnessTerm.charAt(0) + stiffnessTerm.charAt(2)
+    : stiffnessTerm.slice(0,2) + stiffnessTerm.slice(3);
+  paramTableContainer.addClass( tableClassName.toLowerCase() + "-dyn-stiffness")
+                     .addClass("mount-param-div")
+                     .attr("matrix-term", stiffnessTerm);
+  paramTableContainer.append(createSingleUserDefinedMountParamTable(stiffnessTerm));
   
-def convert_csv(file_list):
-    parts =[]
-    # Danh sách tên file CSV
-    """
-    file_list = ['BodyMount_N1000_FX_FY_FZ_MX_MY_MZ.csv', 'BodyMount_N1001_FX_FY_FZ_MX_MY_MZ.csv',
-                    'BodyMount_N1002_FX_FY_FZ_MX_MY_MZ.csv', 'BodyMount_N1003_FX_FY_FZ_MX_MY_MZ.csv',
-                    'BodyMount_N1004_FX_FY_FZ_MX_MY_MZ.csv']
-    """
-    # Lấy đường dẫn hiện tại
-    current_path = os.getcwd()  
+  const paramTableBtns = createUserDefinedParamTableButtons();
+  paramTableContainer.append(paramTableBtns);
+  mountParamRow.append(paramTableContainer);
+  const matrixTermSelector = self.prev();
+  updateStiffnessMatrixTermSelector(matrixTermSelector);
+}
 
-    body_response_nids = []
-    body_microphone_response_nids = []
-    microphone_response_nids = [] 
 
-    with open(file_list[0], 'r', encoding='utf-8') as f:
-      column_line = f.readline().strip()
-    column = column_line.split(',')
-        
-        
-    for k in range(1,int(len(column))):     
-      
-        nid = column[k].split(".")[0]
-        wrench = column[k].split(".")[1]
-        lbl = column[k].split(".")[2]
-        MagPhase = column[k].split(".")[3]
-        if wrench =="FX" and lbl == "ax" and MagPhase=="Mag":
-            body_response_nids.append(int(nid))
-        if wrench =="FX" and lbl == "px" and MagPhase=="Mag":            
-            microphone_response_nids.append(int(nid)) 
+$('.btn-number').click(function(e){
+  e.preventDefault();
 
-    rpm=0  
-    bodydata = {}
-    bodydata_body = {}
-    column_names = {}
-    column_names_body = {}       
+  const fieldName = $(this).attr('data-field');
+  const type = $(this).attr('data-type');
+  const input = $("input[name='"+fieldName+"']");
+  const currentVal = parseInt(input.val());
+  if (!isNaN(currentVal)) {
+    if(type == 'minus') {
+      if(currentVal > input.attr('min')) {
+        input.val(currentVal - 1).change();
+      } 
+      if(parseInt(input.val()) == input.attr('min')) {
+        $(this).attr('disabled', true);
+      }
+    } else if(type == 'plus') {
+      if(currentVal < input.attr('max')) {
+        input.val(currentVal + 1).change();
+      }
+      if(parseInt(input.val()) == input.attr('max')) {
+        $(this).attr('disabled', true);
+      }
+    }
+    if (parseInt(input.val()) != BUILDER_NUM_MOUNTS){
+      BUILDER_NUM_MOUNTS = parseInt(input.val());
+      $("#mount-param-panel").html("");
+      insertMountPanels();
+    }
+  } else {
+    input.val(0);
+  }
+});
 
-    for file_name in file_list:   
-        base_name = os.path.splitext(os.path.basename(file_name))[0]  # 'BodyMount_N1000_FX_FY_FZ_MX_MY_MZ'        
-        parts = base_name .split("_")  # tách chuỗi thành danh sách các phần tử  
 
-        FX = parts[0] + "_"+  parts[1]  + "_"+ parts[2] + ".csv"
-        FY = parts[0] + "_"+  parts[1]  + "_"+ parts[3] + ".csv"
-        FZ = parts[0] + "_"+  parts[1]  + "_"+ parts[4] + ".csv"
-        MX = parts[0] + "_"+  parts[1]  + "_"+ parts[5] + ".csv"
-        MY = parts[0] + "_"+  parts[1]  + "_"+ parts[6] + ".csv"
-        MZ = parts[0] + "_"+  parts[1]  + "_"+ parts[7] + ".csv"
-        t=0
-        for wrench in [FX,FY,FZ,MX,MY,MZ]:
-            k=0    
-            data = pd.read_csv(file_name).to_numpy()   
-            rpm = 0        
-            bodydata[rpm] = []
-            column_names[rpm] = []  
-            for item_microphone_response in microphone_response_nids:
-                body_freq = data[:, 0]
-                body_resp_3 = data[:, 12*k+1+2*t]
-                body_resp_4 = data[:, 12*k+2+2*t]
-                body_resp = body_resp_3 * np.cos(np.radians(body_resp_4)) + 1.j * body_resp_3 * np.sin(np.radians(body_resp_4))
-                body_resp_1 = body_resp.real
-                body_resp_2 = body_resp.imag        
-                k=k+1
-                axis = "px"
-                new_colnames_1 = [f"{item_microphone_response}.{axis}.{comp}" for comp in ("R", "I", "Mag", "Phase")]
-                
-                if len(bodydata[rpm]):
-                    bodydata[rpm].extend([body_resp_1, body_resp_2,body_resp_3, body_resp_4])
-                    column_names[rpm].extend(new_colnames_1)
-                else:
-                    bodydata[rpm].append([body_freq,body_resp_1,body_resp_2,body_resp_3, body_resp_4])
-                    column_names[rpm].extend(["freq"] + new_colnames_1)
+$('.input-number').change(function() {
+  const minValue = parseInt($(this).attr('min'));
+  const maxValue = parseInt($(this).attr('max'));
+  const valueCurrent = parseInt($(this).val());
+  const name = $(this).attr('name');
+  if(valueCurrent >= minValue) {
+    $(".btn-number[data-type='minus'][data-field='"+name+"']").removeAttr('disabled')
+  } else {
+    $(this).val(minValue);
+  }
+  if(valueCurrent <= maxValue) {
+    $(".btn-number[data-type='plus'][data-field='"+name+"']").removeAttr('disabled')
+  } else {
+    $(this).val(maxValue);
+  } 
+  if (parseInt($(this).val()) != BUILDER_NUM_MOUNTS) {
+    BUILDER_NUM_MOUNTS = parseInt($(this).val());
+    $("#mount-param-panel").empty();
+    insertMountPanels();
+  }
+});
+
+
+$(".input-number").keydown(onKeydownAllowPositiveIntNumber);
+
+
+const bindEvents = function(){
+  bindMathTermGroupHighlightEvent();
+  bindCollapsiblePanelClickEvent();
+}
+
+
+const bindMathTermHighlightEvent = function(){
+  $(".tuning-slider-region").mouseover( (obj)=>{
+    let sliderId = $(obj.currentTarget).find(".slider").attr("id");
+    if (sliderId.slice(0, 6) == "mountK"){
+      sliderId = sliderId.slice(0, -2);
+    }
+    let objIdentity = 'span.math-term[math-term-id="' + sliderId + '"]';
+    $(objIdentity).css("color", "red");
+    $(objIdentity).css("font-size", "large");
+  });
   
-            line= 12*k
-            bodydata_body[rpm] = []
-            column_names_body[rpm] = []    
-            k=0            
-            for item_body_response in body_response_nids:  
-                new_colnames_2= [u + c
-                                   for u in [f"{item_body_response}.ax", f"{item_body_response}.ay", f"{item_body_response}.az", f"{item_body_response}.rx", f"{item_body_response}.ry", f"{item_body_response}.rz"]
-                                   for c in [".R", ".I", ".Mag", ".Phase"]
-                                   ]   
-                 
-                column_names_body[rpm].extend(new_colnames_2)                
-                for i in range(0, 6):
-                    body_freq = data[:, 0]
-                    body_resp_3 = data[:, line+12*k+1+2*t]
-                    body_resp_4 = data[:, line+12*k+2+2*t]
-                    
-                    body_resp = body_resp_3 * np.cos(np.radians(body_resp_4)) + 1.j * body_resp_3 * np.sin(np.radians(body_resp_4))
-                    body_resp_1 = body_resp.real
-                    body_resp_2 = body_resp.imag  
-                    k=k+1                    
-                    bodydata_body[rpm].extend([body_resp_1, body_resp_2,body_resp_3, body_resp_4])
-                    
-            bodydata[rpm].extend(bodydata_body[rpm]) 
-            column_names[rpm].extend(column_names_body[rpm])            
-            for rpm, data in bodydata.items():
-                collated_data = pd.DataFrame(np.vstack(data).T, columns=column_names[rpm])
-                
-            csv_file_path = current_path + "\\uploads\\body_csv\\" +  wrench
-
-            collated_data.to_csv(csv_file_path, index=False)
-            t=t+1
-
-def delete_file_in_folder(path):   
-    for filename in os.listdir(path):
-        file_path = os.path.join(path, filename)
-#        print(file_path)
-        if os.path.isfile(file_path):
-            os.remove(file_path)    
-
-def delete_old_file():
-    current_path = os.getcwd()
-    eng_files = current_path + "\\uploads\\engine\\"
-    body_files_1 = current_path + "\\uploads\\body_upload_pch\\"
-    body_files_2 = current_path + "\\uploads\\body_upload_csv\\"
-    body_files_3 = current_path + "\\uploads\\body_pch\\"
-    body_files_4 = current_path + "\\uploads\\body_csv\\"
-    avl_files  = current_path + "\\uploads\\avl\\"
-    db_files_upload = current_path + "\\uploads\\db\\"
-    db_files = current_path + "\\db\\"    
-    mountparameter_files = current_path + "\\uploads\\mount_parameter\\"
-    Sensitive_folder = current_path + "\\Sensitive"
-    delete_file_in_folder(eng_files)      
-    delete_file_in_folder(body_files_1) 
-    delete_file_in_folder(body_files_2)     
-    delete_file_in_folder(body_files_3)      
-    delete_file_in_folder(body_files_4) 
-    delete_file_in_folder(avl_files)     
-    delete_file_in_folder(db_files_upload)
-    delete_file_in_folder(db_files)
-    delete_file_in_folder(mountparameter_files)
-    delete_file_in_folder(Sensitive_folder)    
-
-@app.route('/save_mount_csv', methods=['POST'])
-def save_mount_csv():
-    raw_post_data = request.form.get("mountParams")
-    mount_params = json.loads(raw_post_data)
-    save_folder = os.path.join(os.getcwd(), 'Mount_parameter')
-    os.makedirs(save_folder, exist_ok=True)
-    now = datetime.datetime.now()
-    timestamp = now.strftime("%Y%m%d_%H%M%S")  
-    file_name = f"mount_params_{timestamp}.txt"
-    file_path = os.path.join(save_folder,file_name)
-    print(file_path)
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(mount_params, f, ensure_ascii=False, indent=2)
-    return{"status": True, "save_folder": save_folder, "file_name": file_name}
-
-@app.route("/create_db_BlockedForce", methods=["POST"])
-def create_db_BlockedForce():
-  delete_folder_file(current_path + "\\BlockedForce\\")
-  delete_file_in_folder(current_path + "\\BlockedForce\\BlockedForce_Output\\")
-  k = int(request.form["BF_BodySideType"])
-  h = int(request.form["BF_ResultType"])
+  $(".tuning-slider-region").mouseleave( (obj)=>{
+    let sliderId = $(obj.currentTarget).find(".slider").attr("id");
+    if (sliderId.slice(0, 6) == "mountK"){
+      sliderId = sliderId.slice(0, -2);
+    }
+    let objIdentity = 'span.math-term[math-term-id="' + sliderId + '"]';
+    $(objIdentity).css("color", "");
+    $(objIdentity).css("font-size", "");
+  });
+}
 
 
-  bf_refAcce = float(request.form["bf_pres_reflevel"])
-  bf_refPres = float(request.form["bf_acce_reflevel"])
-  db_path = os.path.join(app.config['DB_DIR'], _DB_NAME)
-  files = request.files.getlist("BF_ReactionForceFiles")
-  bf_reactionForce_files = upload_files(files, "\\BlockedForce\\bf_reactionforce_csv", fix_filename=None)   
-  convert_csv_ReactionForce(bf_reactionForce_files)   
+const bindMathTermGroupHighlightEvent = function(){
+  $(".collapsible[math-term-group-id]").mouseover((obj)=>{
+    let mathTermGrpId = $(obj.currentTarget).attr("math-term-group-id");
+    let objIdentity = 'span.math-term-group[math-term-group-id="' + mathTermGrpId + '"]';
+    $(objIdentity).css("color", "red");
+    $(objIdentity).css("font-size", "large");
+  });
 
-  t = 0   
+  $(".collapsible[math-term-group-id]").mouseleave((obj)=>{
+    let mathTermGrpId = $(obj.currentTarget).attr("math-term-group-id");
+    let objIdentity = 'span.math-term-group[math-term-group-id="' + mathTermGrpId + '"]';
+    $(objIdentity).css("color", "");
+    $(objIdentity).css("font-size", "");
+  });
+}
+
+
+const bindCollapsiblePanelClickEvent = function(){
+  // collapsibleButtons is the jquery object of the binding buttons
+  $(":not(.mount-param-sub-panel, .dbinfo-single-mount-param-container) > .collapsible").click( (e)=>{
+    $(e.currentTarget).toggleClass("active");
+    $(e.currentTarget).next().slideToggle("fast");
+  });
+
+  $(".collapsible-group").click( (e)=>{
+    $(".collapsible-group").toggleClass("active");
+    $(e.currentTarget).parents(":eq(1)").next().slideToggle("fast");
+  });
+}
+
+
+const onMountInfoPanelExpansionBtnClicked = function(e){
+  // collapsibleButtons is the jquery object of the binding buttons
+  $(e.currentTarget).toggleClass("active");
+  $(e.currentTarget).next().slideToggle("fast");
+}
+
+
+const onUserDefinedMountPanelExpansionBtnClicked = function(e){
+  const targetTagName = e.target.tagName.toLowerCase();
+  if (targetTagName == "select"){
+    e.preventDefault();
+  } else if (targetTagName == "input") {
+  } else if (targetTagName == "label") {
+    e.preventDefault();
+    const checkbox = $(e.target).prev();
+    checkbox.prop("checked", !checkbox.prop("checked"));
+  } else {
+    $(e.currentTarget).toggleClass("active");
+    $(e.currentTarget).nextAll("div").slideToggle("fast");
+  }
+}
+
+
+const showHistoryNameInputDialog = function(){
+  $('.dialog-overlay').fadeIn(500);
+  $('.dialog-box.input-dialog').fadeIn(500);
+}
+
+
+const closeHistoryNameInputDialog = function(){
+  $('.dialog-overlay').fadeOut(500);
+  $('.dialog-box.input-dialog').fadeOut(500);
+  setTimeout( ()=>{
+    $('#hist-name-input').val('');
+  }, 1000);
+}
+
+
+const showClearDBConfirmationDialog = function(){
+  $('.dialog-overlay').fadeIn(500);
+  // console.log($('.dialog-box .yesno-dialog'));
+  $('.dialog-box.yesno-dialog').fadeIn(500);
+}
+
+
+const closeClearDBConfirmationDialog = function(){
+  $('.dialog-overlay').fadeOut(500);
+  $('.dialog-box.yesno-dialog').fadeOut(500);
+}
+
+
+const plotGraph = function(graphs){
+  let chartDiv = $("#chart_1");
+  if (graphs['status']){
+    chartDiv.text("");
+    // console.log(graphs["data"]);
+    Plotly.newPlot('chart_1', graphs['data'], {});
+  } else {
+    chartDiv.text(graphs['data']);
+    chartDiv.css('color', 'red');
+  }
+}
+
+const updateRpmList = function(rpmList){
+  let cbxCtrl = $("#cbx-rpm-selector");
+  cbxCtrl.empty();
+  $.each(rpmList, (idx, item)=>{
+    cbxCtrl.append( $("<option>", {value: idx, text: item + "RPM"}) );
+  });
+}
+
+
+const updateResponseLabelList = function(respList){
+  let cbxCtrl = $("#cbx-response-label");
+  cbxCtrl.empty();
+  $.each(respList, (idx, item)=>{
+    cbxCtrl.append( $("<option>", {value: idx, text: item}) );
+  });
+}
+
+
+const updateMicrophoneList = function(microphoneList){
+  let cbxCtrl = $("#cbx-microphone-id");
+  cbxCtrl.empty();
+  console.log("microphoneList", microphoneList);
+  $.each(microphoneList, (idx, item)=>{
+    cbxCtrl.append( $("<option>", {value: idx, text: item}) );
+  })
+  console.log("cbxCtrl", cbxCtrl);
+}
+
+
+const fillMountIds = function(){
+  let inputField = $("#txt-avl-mount-ids");
+  if ( !validateInputNidsRealTime(inputField) ) return;
+  let mountIdText = inputField.val();
+  $.each( mountIdText.split(","), (idx, item)=>{
+    $("#td-avl-mount-id-" + (idx + 1)).text(item.trim());
+  })
+}
+
+
+const validateInputRefLevel = function(inputFieldId){
+  let val = $("#" + inputFieldId).val();
+  if ( !isPositiveFloat(val) ) return false;
+  return true;
+}
+
+
+const validateInputRefLevelRealTime = function(inputField, ...args){
+  return validateInputFieldRealTime(inputField, validateInputRefLevel);
+}
+
+const updateGraphRealTimeByRefLevel = function(inputField){
+  const PRES_REFLEVEL_FIELD_ID = "txt-ref-pres";
+  const ACCE_REFLEVEL_FIELD_ID = "txt-ref-acce";
+  const PRES_RESPONSE_LABEL = "px";
+  const isDecibel = $("#show-db").prop("checked");
+  const responseLabel = $("#cbx-response-label").find(":selected").text();
+  if ( !validateInputRefLevelRealTime(inputField) ) return false;
+  if ( !isDecibel ) return true;
+  let inputFieldId = inputField.attr("id");
+  if (inputFieldId == PRES_REFLEVEL_FIELD_ID && responseLabel != PRES_RESPONSE_LABEL)
+    return true;
+  if (inputFieldId == ACCE_REFLEVEL_FIELD_ID && responseLabel == PRES_RESPONSE_LABEL)
+    return true;
+  updateGraph();
+  return true;
+}
+
+
+
+const validateFreqInterval = function(inputFieldId){
+  let val = $("#" + inputFieldId).val();
+  if ( !isPositiveFloat(val) ) return false;
+  return true;
+}
+
+
+const validateFreqIntervalRealTime = function(inputField, ...args){
+  return validateInputFieldRealTime(inputField, validateFreqInterval);
+}
+
+
+const updateGraphRealTimeByFreqInterval = function(inputField){
+ if ( !validateFreqIntervalRealTime(inputField) ) return false;
+ updateGraph();
+ return true; 
+}
+
+const updateGraphRealTimeByFreqInterval_BF = function(inputField){
+ getUserOptions_blockedforce();
+ update_graph_BlockedForce();
+ return true; 
+}
+
+const validateInputFieldRealTime = function(inputField, validateFn, preprocessorFn=null, ...args) {
+  /*
+    `inputField`: (jqueryObj) the input field to be validated
+    `validateFn`: (callable) function to validate the input field
+    `preprocessorFn`: (optional[callable]) preprocessing function applied on `inputField` which yields...
+                      the first argument for `validateFn`.
+                      if it is null, the first argument of `validateFn` will be the id of `inputField`.
+    `...args`: (optional[any]) the other arguments of validateFn
+  */
+  let validateFnInput = inputField.attr("id");
+  if (preprocessorFn !== null) {
+    validateFnInput = preprocessorFn(inputField);
+  }
+
+  if ( !validateFn(validateFnInput, ...args) ) {
+    inputField.css("border-color", "red");
+    inputField.on("focus", (e) => {
+      $(e.currentTarget).css({"border-color": "red",
+                              "outline-color": "red"});
+    }).on("blur", (e)=> {
+      $(e.currentTarget).css({"border-color": "red",
+                              "border-width": "1px"});
+    });
+    inputField.focus();
+    return false;
+  }
+  inputField.on("focus", (e) => {
+    $(e.currentTarget).css({"border-color": "",
+                            "outline-color": ""});
+  }).on("blur", (e)=> {
+    $(e.currentTarget).css({"border-color": "",
+                            "border-width": ""});
+  });
+  return true;
+}
+
+
+const validateInputMountPropertyRealTime = function(inputField, allowNegative=false, ...args){
+  return validateInputFieldRealTime(inputField, validateInputMountProperty, null, allowNegative);
+}
+
+
+const validateInputMountingAngleRealTime = function(inputField, ...args){
+  let preprocessor = (inputObj)=>inputObj.attr("id").slice(-1);
+  return validateInputFieldRealTime(inputField, validateInputMountingAngle, preprocessor);
+}
+
+
+const validateInputNidsRealTime = function(inputField, checkEnough=true, ...args){
+  return validateInputFieldRealTime(inputField, validateInputNids, null, checkEnough);
+}
+
+
+const handleLinkedSliders = function(invoker){
+  const targetSlider = invoker.currentTarget;
+  const targetId = targetSlider.id;
+  const [_, mountIdx, axisIdx] = targetId.split("-");
+  // targetRow = targetId[targetId.length - 2];
+  // targetCol = targetId[targetId.length - 1];
   
-#BF_Acoustic_responseId   
+  if ( $("#linkedK-" + mountIdx).prop("checked") ){
+    for (let colIdx = 1; colIdx <= 3; colIdx++){
+      let label = mountIdx + "-" + colIdx;
+      $("#numMountK-" + label).val(targetSlider.value);
+      if (colIdx != axisIdx)
+        $("#mountK-" + label).val(targetSlider.value);
+    }
+  } else {
+    let label = mountIdx + "-" + axisIdx;
+    $("#numMountK-" + label).val(targetSlider.value);
+  }
+//  updateGraph();
+}
 
-  raw_post_data_1 = request.form["BF_responseId"]
-  if  raw_post_data_1!="":
-    responseId_nids = list(map(lambda x: int(x.strip()), raw_post_data_1.split(",")))
-    print("acoustic_responseId_nids")
-    print(responseId_nids)  
 
-#BF_body_responseId 
+const linkInputSliders = function(mountIdx){
+  for (let colIdx = 1; colIdx <= 3; colIdx++){
+    $("#mountK-" + mountIdx + "-" + colIdx).on('change', handleLinkedSliders);
+  }
+}
+
+const getInvisibleGroups = function(){
+  const graphDiv = document.getElementById("chart_1");
+  const invisibleGroups = new Set();
+  graphDiv.data.forEach( (trace, idx)=>{
+    if (trace.visible == "legendonly")
+      invisibleGroups.add(trace.legendgroup);
+  });
+  return Array.from(invisibleGroups);
+}
+
+
+const getCurrentZoomRange = function(){
+  const graphDiv = document.getElementById("chart_1");
+  const zoomRange = {}
+  let gotXRange = false;
+  let gotYRange = false;
+  for (key in graphDiv.layout){
+    let axisName = key.substring(0, 5)
+    if ( (axisName == "xaxis") && !gotXRange ){
+      zoomRange["xrange"] = graphDiv.layout[key].range;
+      gotXRange = true;
+    } else if ( (key == "yaxis") && !gotYRange ){
+      zoomRange["yrange"] = graphDiv.layout[key].range;
+      gotYRange = true;
+    }
+    if (gotXRange && gotYRange) return zoomRange;
+  }
+}
+
+
+const getUserOptions = function(){
+  let opts = {
+	"full": document.querySelector("#full-sensitivity").checked,
+    "no_cross": document.querySelector("#single-mount").checked,
+    "compute_contrib": document.querySelector("#transfer-path").checked,
+  };
+
+  let avlFactors = {};
+  for (let colIdx = 1; colIdx <= NUM_MOUNTS; colIdx++){
+    avlFactors["H-" + colIdx] = parseFloat( $("#AVLAcc-" + colIdx).val() ) / 100.0 + 1.0;
+    if (isNaN(avlFactors["H-" + colIdx]))
+      avlFactors["H-" + colIdx] = 1.0;
+  }
+
+  opts["avl_mount_factors"] = avlFactors;
   
-  raw_post_data_2 = request.form["BF_body_responseId"]
-  if  raw_post_data_2!="":   
-    body_responseId_nids = list(map(lambda x: int(x.strip()), raw_post_data_2.split(",")))
-    print("body_responseId_nids")
-    print(body_responseId_nids) 
+  let engineMountFactors = {};
+  for (let rowIdx = 1; rowIdx <= NUM_MOUNTS; rowIdx++){
+    for (let colIdx = 1; colIdx <= NUM_MOUNTS; colIdx++){
+      let label = "-" + rowIdx + "-" + colIdx;
+      engineMountFactors["H" + label] = parseFloat( $("#enMountH" + label).val() ) / 100.0 + 1.0;
+      if (isNaN(engineMountFactors["H" + label]))
+        engineMountFactors["H" + label] = 1.0;
+    }
+  }
+  opts["engine_mount_factors"] = engineMountFactors;
+
+  let mountFactors = {};
+  for (let rowIdx of FLEX_MOUNT_IDXS){
+    for (let colIdx = 1; colIdx <= 3; colIdx++){
+      let label = "-" + (rowIdx + 1) + "-" + colIdx;
+      mountFactors["H" + label] = parseFloat( $("#mountK" + label).val() ) / 100.0 + 1.0;
+      if (isNaN(mountFactors["H" + label]))
+        mountFactors["H" + label] = 1.0;
+    }
+  }
+  opts["mount_factors"] = mountFactors;
+
+  let bodyMountFactors = {};
+  for (let rowIdx = 1; rowIdx <= NUM_MOUNTS; rowIdx++){
+    for (let colIdx = 1; colIdx <= NUM_MOUNTS; colIdx++){
+      let label = "-" + rowIdx + "-" + colIdx;
+      bodyMountFactors["H" + label] = parseFloat( $("#bodyMountH" + label).val() ) / 100.0 + 1.0;
+      if (isNaN(bodyMountFactors["H" + label]))
+        bodyMountFactors["H" + label] = 1.0;
+    }
+  }
+  opts["body_mount_factors"] = bodyMountFactors;
+
+  let bodyTargetFactors = {};
+  for (let colIdx = 1; colIdx <= NUM_MOUNTS; colIdx++){
+    bodyTargetFactors["H-" + colIdx] = parseFloat( $("#bodyTargetH-" + colIdx).val() ) / 100.0 + 1.0;
+    if (isNaN(bodyTargetFactors["H-" + colIdx]))
+      bodyTargetFactors["H-" + colIdx] = 1.0;
+  }
+  let mount_num = document.getElementById("txt-mount-num").value 
+  opts["mount_num"] = mount_num; 
+  opts["body_target_factors"] = bodyTargetFactors;
+  
+  opts["invisible_groups"] = getInvisibleGroups();
+  opts["zoom_range"] = getCurrentZoomRange();
+  opts["show_history"] = $("#show-history").prop("checked");
+  opts["show_db"] = $("#show-db").prop("checked");
+  opts["a_weight"] = $("#a-weight").prop("checked");
+  opts["chart_height"] = $("#chart-height").val();
+  opts["rpm"] = $("#cbx-rpm-selector").find(":selected").text();
+  opts["response_id"] = $("#cbx-microphone-id").find(":selected").text();
+  
+  opts["target_resp_label"] = $("#cbx-response-label").find(":selected").text();
+  
+  
+  opts["pres_reflevel"] = parseFloat($("#txt-ref-pres").val());
+  opts["acce_reflevel"] = parseFloat($("#txt-ref-acce").val());
+  
+  opts["oct3rd"] = $("#oct3rd").prop("checked");
+  opts["no_rot"] = $("#no-rot").prop("checked");
+  opts["df"] = parseFloat($("#txt-df").val());
+  
+  let response_allAcousticNodeID = document.getElementById("txt-response-id").value 
+
+  opts["response_allAcousticNodeID"] = response_allAcousticNodeID;
+  return opts;
+}
+
+
+
+const updateControllerDisplay = function(opts){
+  if (opts.no_cross){
+    $(".hidable").css("cssText", "visibility: hidden");
+    $("#equation-full").css("cssText", "display: none !important");
+    $("#equation-transfer-path").css("cssText", "display: none !important");
+    $("#equation-single-mount").css("cssText", "display: block !important");
+  } else if (opts.compute_contrib){
+    $(".hidable").css("cssText", "visibility: visible");
+    $("#equation-full").css("cssText", "display: none !important");
+    $("#equation-transfer-path").css("cssText", "display: block !important");
+    $("#equation-single-mount").css("cssText", "display: none !important");
+  } else {
+    $(".hidable").css("cssText", "visibility: visible");
+    $("#equation-full").css("cssText", "display: block !important");
+    $("#equation-transfer-path").css("cssText", "display: none !important");
+    $("#equation-single-mount").css("cssText", "display: none !important");
+  }
+}
+
+
+const changeNoti = function(){
+  let noti = $("#noti");
+  let notiText = noti.text();
+  noti.css("cssText", "visibility: visible");
+  noti.css("cssText", "color: #C75476");
+  if (notiText == ""){
+    noti.text("1. Change the chart height");
+  } else {
+    switch(notiText.substring(0,1)) {
+      case "1":
+        noti.text("2. left-click and drag the mouse diagonally to the draw the zoom box");
+        break;
+      case "2":
+        noti.text("3. left-click and drag the mouse horizontally to draw zoom in the x-axis");
+        break;
+      case "3":
+        noti.text("4. left-click and drag vertically to zoom in the y-axis");
+        break;
+      case "4":
+        noti.text("5. shift + left click to pan");
+        break;
+      case "5":
+        noti.text("6. double click to fit the view");
+        break;
+      case "6":
+        noti.text("7. click on any end of an axis enter the view range");
+        break;
+      case "7":
+        noti.text("8. click on the legend of a line to toggle its visibility");
+        break;
+      case "8":
+        noti.text("9. use the toolbar to control the view");
+        break;
+      default:
+        noti.text("");
+    }
+  }
+}
+
+
+const initGraph = function(){
+  let notiText = $("#noti").text();
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        $("#noti").css("cssText", "visibility: visible");
+        $("#noti").text("");
+        $("#noti").css("cssText", "color: #C75476");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/init_graph",
+    data: JSON.stringify({"signal": "init"}),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      plotGraph(response);
+      plotGraph_BlockedForce(response);	  
+      if (response["meta"]["update_resp_labels"]){
+        updateResponseLabelList(response["meta"]["resp_labels"]);
+      }
+      $("#noti").text("Done!");
+      $("#noti").css("cssText", "color: #4CAF50");
+      setTimeout( ()=>{
+        $("#noti").css("cssText", "color: #C75476");
+        $("#noti").text(notiText);
+        //$("#noti").css("cssText", "visibility: hidden");
+      }, 1000);
+    }
+  });
+}
+
+
+const updateGraph = function(resetRpmList=false){
+  let userOpts = getUserOptions();
+  let notiText = $("#noti").text();
+  if (resetRpmList) userOpts["rpm"] = null;
+
+  updateControllerDisplay(userOpts);
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        $("#noti").css("cssText", "visibility: visible");
+        $("#noti").text("Processing... Please wait");
+        $("#noti").css("cssText", "color: #C75476");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/update_graph",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      plotGraph(response);
+      if (response["meta"]["update_resp_labels"]){
+        updateResponseLabelList(response["meta"]["resp_labels"]);
+      }
+      $("#noti").text("Done!");
+      $("#noti").css("cssText", "color: #4CAF50");
+      setTimeout( ()=>{
+        $("#noti").css("cssText", "color: #C75476");
+        $("#noti").text(notiText);
+        $("#noti").css("cssText", "visibility: hidden");
+      }, 1000);
+    }
+  });
   
 
-  if k==1 :
-    files = request.files.getlist("BF_bodyFiles")
-    bf_body_files_pch = upload_files(files, "\\BlockedForce\\bf_body_blocked_force_pch", fix_filename=None) 
-    raw_post_data = request.form["BF_bodymountId"]
-    bf_body_mount_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))    
-    print("bf_body_mount_nids")
-    print(bf_body_mount_nids)    
-    node_ids = np.vstack([bf_body_mount_nids]).astype(np.int64)
-    
-    
-    if raw_post_data_1 !="" and raw_post_data_2=="":     
-        
-        build_database_punch_BlockedForce_acoustic(db_path, bf_body_files_pch[0], node_ids, responseId_nids)      
+}
+
+
+let i = 0;
+const addHistory = function(){
+  $("#dlg-btn-add-hist").text("Processing...");
+
+  all_str ="";
+
  
-    if raw_post_data_1 =="" and raw_post_data_2!="":    
-        build_database_punch_BlockedForce_body(db_path, bf_body_files_pch[0], node_ids,body_responseId_nids)  
-        folder2 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ax"
-        folder3 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ay"
-        folder4 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_az"    
-        output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex"
-        merge_csv_files([folder2, folder3, folder4], output_folder)  
-        
-    if raw_post_data_1 !="" and raw_post_data_2!="":        
-        build_database_punch_BlockedForce(db_path, bf_body_files_pch[0], node_ids, responseId_nids,body_responseId_nids) 
-        # Đường dẫn các folder
-        folder1 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_acoustic"
-        folder2 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ax"
-        folder3 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ay"
-        folder4 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_az"    
-        output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex"
-        merge_csv_files([folder1, folder2, folder3, folder4], output_folder)       
-    blockedforce_calculation(bf_refPres, bf_refAcce)
-    
-  if k==2 :
-    files = request.files.getlist("BF_bodyFiles")
-    bf_body_files_csv = upload_files(files, "\\BlockedForce\\bf_body_blocked_force_csv", fix_filename=None)
-    SPL_list = []
-    ACCE_list = []    
-    for file_name in bf_body_files_csv:
-        if "SPL" in file_name:
-            SPL_list.append(file_name)
-        elif "ACCE" in file_name:
-            ACCE_list.append(file_name)
-
-    if raw_post_data_1 !="" and raw_post_data_2!="":        
-        convert_csv_BodyBlockedForce_acoustic(SPL_list)
-        convert_csv_BodyBlockedForce_structure(ACCE_list)
-        folder_path = r'BlockedForce\body_blocked_force_convert_complex_acoustic'        
-
-        folder1 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_acoustic"
-        folder2 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ax"
-        folder3 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ay"
-        folder4 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_az"    
-        output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex"
-        merge_csv_files([folder1, folder2, folder3, folder4], output_folder)      
-        rename_columns(output_folder) 
-
-    if raw_post_data_1 !="" and raw_post_data_2 =="":        
-        convert_csv_BodyBlockedForce_acoustic(SPL_list)
-        convert_csv_BodyBlockedForce_structure(ACCE_list)
-        folder_path = r'BlockedForce\body_blocked_force_convert_complex_acoustic'        
-
-        folder1 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_acoustic"
-   
-        output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex"
-        merge_csv_files([folder1], output_folder) 
-        
-        rename_columns(output_folder) 
-
-    if raw_post_data_1 =="" and raw_post_data_2 !="":        
-        convert_csv_BodyBlockedForce_acoustic(SPL_list)
-        convert_csv_BodyBlockedForce_structure(ACCE_list)
-        folder_path = r'BlockedForce\body_blocked_force_convert_complex_acoustic'        
-
-
-        folder2 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ax"
-        folder3 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_ay"
-        folder4 = current_path +"\\BlockedForce\\body_blocked_force_convert_complex_structure_az"    
-        output_folder = current_path +"\\BlockedForce\\body_blocked_force_convert_complex"
-        merge_csv_files([ folder2, folder3, folder4], output_folder)      
-        rename_columns(output_folder) 
-        
-    blockedforce_calculation(bf_refPres, bf_refAcce) 
-    shutil.rmtree("ax")
-    shutil.rmtree("ay")
-    shutil.rmtree("az")
-    shutil.rmtree("px") 
-  raw_post_data = request.form.get("BF_loadAtFinish", "false")
-  load_at_finish = raw_post_data.lower() == "true"
+  console.log("mount-avl"); 
+  const innerTextString_1 = $("#mount-avl").text();
+  console.log(innerTextString_1); 
+  str_1 =handle_MountAcce_name(innerTextString_1);
   
-  download_token = str(int(time.time()))
-  app.config["DOWNLOAD_TOKEN"] = download_token
-  new_names = []
-  if raw_post_data_2!="": 
-    for nid in body_responseId_nids:
-        new_names.append(str(nid) + "_ax")
-        new_names.append(str(nid) + "_ay")
-        new_names.append(str(nid) + "_az")
-    print("new_names")
-    print(new_names)
+  console.log("engine-side-mount"); 
+  const innerTextString_2 = $("#engine-side-mount").text();
+  console.log(innerTextString_2); 
+  str_2 = handle_EngineSideMount_name(innerTextString_2);
 
+  console.log("mount-stiffness"); 
+  const innerTextString_3= $("#mount-stiffness").text();
+  console.log(innerTextString_3); 
+  str_3 = handle_MountStiff_name(innerTextString_3);
+
+  console.log("body-side-mount"); 
+  const innerTextString_4 = $("#body-side-mount").text();
+  console.log(innerTextString_4); 
+  str_4 =handle_BodySideMount_name(innerTextString_4);
+
+  console.log("body-target"); 
+  const innerTextString_5 = $("#body-target").text();
+  console.log(innerTextString_5); 
+  str_5 =handle_BodyTargetMount_name(innerTextString_5);  
   
-  dbinfo = {"response_id": []}
-  if raw_post_data_1!="" :
-    dbinfo["response_id"] =responseId_nids
-  else:
-    dbinfo["response_id"] =new_names
-    
-    
-  return {"status": True, "downloadToken": download_token, "data": dbinfo}
+  let arr = [str_1, str_2, str_3, str_4, str_5].filter(s => s != null && s !== "");
 
-@app.route("/update_db_BlockedForce", methods=["POST"])
-def update_db_BlockedForce():
+  // Nối các phần tử trong mảng bằng "xxxxx"
+  all_str = arr.join("____");
 
-  h = int(request.form["BF_ResultType"])
-  print("BF_ResultType h = ")
-  print(h)   
-  raw_post_data = request.form["BF_responseId"]
-  responseId_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
-  print("responseId_nids")
-  print(responseId_nids)  
- #BF_body_responseId 
-  raw_post_data = request.form["BF_body_responseId"]
-  body_responseId_nids = list(map(lambda x: int(x.strip()), raw_post_data.split(",")))
-  print("body_responseId_nids")
-  print(body_responseId_nids) 
 
-  new_names = []
-  for nid in body_responseId_nids:
-    new_names.append(str(nid) + "_ax")
-    new_names.append(str(nid) + "_ay")
-    new_names.append(str(nid) + "_az")
-  print("new_names")
-  print(new_names)  
-  dbinfo = {"response_id": []}
-  if h == 1:
-    dbinfo["response_id"] =responseId_nids
-  else:
-    dbinfo["response_id"] =new_names
-    
-  return {"status": True, "data": dbinfo}
+  console.log("all_str");   
+  console.log(all_str); 
   
-@app.route("/update_graph_BlockedForce", methods=['GET', 'POST'])
-def update_graph_BlockedForce():
-  inputs = request.get_json()
 
-  df = pd.DataFrame({'freq': []})
-  opts = make_synthesis_opts(inputs)
-  result_type_1 = inputs["r1"]    
-  result_type_2 = inputs["r2"]
-  result_type_3 = inputs["r3"] 
-  result_type_4 = inputs["r4"] 
+  let historyName ="";
 
-  freq_step = inputs["df_2"]
+
+  if (all_str == "") {
+      historyName = "history";
+  } else {
+      i = i + 1;
+      historyName = "history_" + i.toString();
+      console.log("history_" + i.toString() + " = " + all_str);
+	  note = "history_" + i.toString() + " = " + all_str
+      const textarea = document.getElementById('txt-chart_note');
+      textarea.value += "\n" + note;	  
+  }
+
+  $.ajax({
+    type: "POST",
+    url: "/add_history",
+    data: JSON.stringify({"signal": "add", "name": historyName}),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"] == "ok"){
+        if ( $("#show-history").prop("checked") ){
+          updateGraph();
+        }
+        $("#dlg-btn-add-hist").text("Done!");
+        $("#dlg-btn-add-hist").css("cssText", "background-color: #4CAF50")
+        closeHistoryNameInputDialog();
+        setTimeout( ()=>{
+          $("#dlg-btn-add-hist").text("Add");
+          $("#dlg-btn-add-hist").css("cssText", "background-color: DodgerBlue");
+        }, 500);
+      } else if (response["status"] == "nodata"){
+        $("#dlg-btn-add-hist").text("No Data!");
+        $("#dlg-btn-add-hist").css("cssText", "background-color: #C75476");
+        closeHistoryNameInputDialog();
+        setTimeout( ()=>{
+          $("#dlg-btn-add-hist").text("Add");
+          $("#dlg-btn-add-hist").css("cssText", "background-color: DodgerBlue");
+        }, 1000);
+      }
+    } // end success
+  });
+}
+
+
+
+const validateRefLevelBeforeDownload = function(forWaterfall=false){
+  const PRES_REFLEVEL_FIELD_ID = "txt-ref-pres";
+  const ACCE_REFLEVEL_FIELD_ID = "txt-ref-acce";
+  const PRES_RESPONSE_LABEL = "px";
+  const isDecibel = $("#show-db").prop("checked");
+  if (!isDecibel && !forWaterfall) return true;  // when forWaterfall=true, `decibel` is forced regardless of the user option
   
+  const responseLabel = $("#cbx-response-label").find(":selected").text();
+  if ( !responseLabel ) return true; // no response label found, should be no database
   
-  bf_pres_reflevel = inputs["bf_pres_reflevel"]  
-  bf_acce_reflevel = inputs["bf_acce_reflevel"]   
+  let inputFieldId;
+  if (responseLabel == PRES_RESPONSE_LABEL)
+    inputFieldId = PRES_REFLEVEL_FIELD_ID;
+  else
+    inputFieldId = ACCE_REFLEVEL_FIELD_ID;
+
+  return validateInputRefLevel(inputFieldId);
+}
 
 
-  AcousticNodeID_status = inputs["response_allAcousticNodeID"] 
+const downloadCsv = function(execButtonHandle){
 
-  input_folder = current_path + '\\BlockedForce\\SPL_BF\\'
-  output_folder = current_path + '\\BlockedForce\\SPL_BF_changefreq\\'  
-  interpolate_complex_csv(input_folder, output_folder, float(freq_step), bf_pres_reflevel, bf_acce_reflevel)    
+  let userOpts = getUserOptions();
+  let buttonText = execButtonHandle.text();
 
-  if AcousticNodeID_status != "":
-    input_folder = current_path + '\\BlockedForce\\SPL_BF_changefreq\\'
-    output_folder = current_path + '\\BlockedForce\\SPL_BF_3rdOctave\\' 
-    OneThirdOctave_calculation(input_folder, output_folder)   
-    
-  try:     
-    Atrue = None
-    plot_row_heights = [400, 800, 300]
-    opts.plot_row_height = plot_row_heights[int(inputs["chart_height"])]
-    Asyn_history = None
-    plotter = Plotter(opts)
+  if ( !validateRefLevelBeforeDownload() ) {
+    // terminate the download process if input reference level is invalid
+    execButtonHandle.text("Invalid Ref. Level!");
+    execButtonHandle.css("cssText", "background-color: #C75476")
+    setTimeout( ()=>{
+      execButtonHandle.text(buttonText);
+      execButtonHandle.css("cssText", "background-color: DodgerBlue");
+    }, 1000);
+    return;
+  }
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        execButtonHandle.text("Processing...");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/download",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"] == "nodata"){
+        execButtonHandle.text("No Data!");
+        execButtonHandle.css("cssText", "background-color: #C75476")
+        setTimeout( ()=>{
+          execButtonHandle.text(buttonText);
+          execButtonHandle.css("cssText", "background-color: DodgerBlue");
+        }, 1000);
+        return;
+      }
+      const blob = new Blob([response["data"]], {type: "text/plain;charset=utf-8"});
+      const link = document.createElement("a");
+      link.href = window.URL.createObjectURL(blob);
+      let fileName;
+      if (response["status"] == "error"){
+        fileName = "error.log";
+        execButtonHandle.text("Error!");
+        execButtonHandle.css("cssText", "background-color: #C75476");
+      } else {
+        let aweight = "", db = "", oct3rd = "", no_rot = "", resultselector = "";
+        if (userOpts["a_weight"] && userOpts["target_resp_label"] == "px")
+          aweight = "_a-weighted";
+        if (userOpts["show_db"])
+          db = "_dB";
+        if (userOpts["oct3rd"])
+          oct3rd = "_3rd-Oct";	
+        if (userOpts["no_rot"])
+          no_rot = "_no-rot";	
+        if (userOpts["full"])
+          resultselector = "_Full-Sensitive";		  
+        if (userOpts["no_cross"])
+          resultselector = "_SingleMount";	
+        if (userOpts["compute_contrib"])
+          resultselector = "_TPA";			  
 
-    folder_path = current_path + '\\BlockedForce\\SPL_BF'  
-    folder_path_Octave = current_path + '\\BlockedForce\\SPL_BF_3rdOctave'
-    folder_path_changefreq = current_path + '\\BlockedForce\\SPL_BF_changefreq'    
-    freq = None
-    value = []
+        fileName = userOpts["response_id"] + "_" + userOpts["rpm"] + "_" + userOpts["target_resp_label"] + resultselector + db + no_rot + aweight + oct3rd + ".csv";
+      }
+      link.download = fileName;
+      link.dispatchEvent(new MouseEvent('click'));
+      setTimeout( ()=>{
+        execButtonHandle.text(buttonText);
+        execButtonHandle.css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+    }
+  });
+}
 
-    # Lấy danh sách file CSV trong thư mục
-    file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
 
-    
-    for file_name in file_list:
-        min_value_1 =0
-        min_value_2 =0
-        min_value_3 =0
-        min_value_4 =0
-        max_value_1 =0
-        max_value_2 =0
-        max_value_3 =0
-        max_value_4 =0
-        file_path = os.path.join(folder_path, file_name)
-        file_path_Octave = os.path.join(folder_path_Octave, file_name) 
-        file_path_changefreq = os.path.join(folder_path_changefreq, file_name)         
-        df = pd.read_csv(file_path)
-        df_Octave = pd.read_csv(file_path_Octave)
-        df_changefreq = pd.read_csv(file_path_changefreq)        
-        # Lấy cột 1 (freq) nếu chưa lấy
+const downloadWaterfall = function(format, execButtonHandle){
+  let userOpts = getUserOptions();
+  let buttonText = execButtonHandle.text();
+  if ( !validateRefLevelBeforeDownload(true) ) {
+    // terminate the download process if input reference level is invalid
+    execButtonHandle.text("Invalid Ref. Level!");
+    execButtonHandle.css("cssText", "background-color: #C75476")
+    setTimeout( ()=>{
+      execButtonHandle.text(buttonText);
+      execButtonHandle.css("cssText", "background-color: DodgerBlue");
+    }, 1000);
+    return;
+  }
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        execButtonHandle.text("Processing...");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/download_waterfall/" + format,
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"] == "nodata"){
+        execButtonHandle.text("No Data!");
+        execButtonHandle.css("cssText", "background-color: #C75476")
+        setTimeout( ()=>{
+          execButtonHandle.text(buttonText);
+          execButtonHandle.css("cssText", "background-color: DodgerBlue");
+        }, 1000);
+        return;
+      }
+      let fileName;
+      if (response["status"] == "error") {
+        fileName = "error.log";
+        execButtonHandle.text("Error!");
+        execButtonHandle.css("cssText", "background-color: #C75476");
+      } else {
+        let aweight = "";
+        if (userOpts["a_weight"] && userOpts["target_resp_label"] == "px")
+          aweight = "_a_weighted";
 
-        if result_type_1 == 1 :
-            freq = df_changefreq.iloc[:, 0].tolist()            
-            value_col = df_changefreq.iloc[:, int(2)].apply(safe_float)
+        let oct3rd = "";
+        if (userOpts["oct3rd"])
+          oct3rd = "_oct3rd";
 
-        if result_type_2 == 1 :
-            freq = df_changefreq.iloc[:, 0].tolist()             
-            value_col = df_changefreq.iloc[:, int(3)].apply(safe_float)
+        fileName = "waterfall" + "_" + userOpts["response_id"] + "_" + userOpts["target_resp_label"] + aweight + oct3rd + "." + format;
+      }
+      const blob = new Blob([response["data"]], {type: "text/plain;charset=utf-8"});
+      const link = document.createElement("a");
+      link.href = window.URL.createObjectURL(blob);
+      link.download = fileName;
+      link.dispatchEvent(new MouseEvent('click'));
+      setTimeout( ()=>{
+        execButtonHandle.text(buttonText);
+        execButtonHandle.css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+    }
+  });
+}
 
-        if result_type_3 == 1 :
-            freq = df_changefreq.iloc[:, 0].tolist()             
-            value_col = df_changefreq.iloc[:, int(4)].apply(safe_float)
- 
-        if result_type_4 == 1 :
-            freq = df_Octave.iloc[:, 0].tolist()             
-            value_col = df_Octave.iloc[:, int(1)].apply(safe_float)
-    
-        value.append(value_col.tolist())
 
-    micro_list = []
+const downloadMiscData = function(requestName, execButtonHandle){
+  let userOpts = getUserOptions();
+  userOpts["request_name"] = requestName;
+  let buttonText = execButtonHandle.text();
 
-    for f in os.listdir(folder_path):
-        full_path = os.path.join(folder_path, f)
-        if os.path.isfile(full_path):
-            name_without_ext = os.path.splitext(f)[0]
-            micro_list.append(name_without_ext)
-        
-    df = pd.DataFrame({'freq': freq})
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        execButtonHandle.text("Processing...");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/download_misc",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"] == "nodata"){
+        execButtonHandle.text("No Data!");
+        execButtonHandle.css("cssText", "background-color: #C75476")
+        setTimeout( ()=>{
+          execButtonHandle.text(buttonText);
+          execButtonHandle.css("cssText", "background-color: DodgerBlue");
+        }, 1000);
+        return;
+      }
+      const blob = new Blob([response["data"]], {type: "text/plain;charset=utf-8"});
+      let fileName;
+      if (response["status"] == "error") {
+        fileName == "error.log"
+        execButtonHandle.text("Error!");
+        execButtonHandle.css("cssText", "background-color: #C75476")
+      } else {
+        if (requestName == "rf")
+          fileName = "reaction_force";
+        else
+          fileName = "spring_free_acceleration"
 
-    # Thêm các cột dữ liệu cho từng micro
-    for i, micro_name in enumerate(micro_list):
-        # Kiểm tra độ dài value[i] có bằng độ dài freq không
-        if len(value[i]) != len(freq):
-            print(f"Warning: length mismatch for micro {micro_name}")
-        df[micro_name] = value[i]
+        fileName += "_" + userOpts["rpm"] + ".csv";
+      }
+      const link = document.createElement("a");
+      link.href = window.URL.createObjectURL(blob);;
+      link.download = fileName;
+      link.dispatchEvent(new MouseEvent('click'));
+      setTimeout( ()=>{
+        execButtonHandle.text(buttonText);
+        execButtonHandle.css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+    }
+  });
+}
 
-    
-    currently_microphone= inputs["currently_microphone"] 
-    print("currently_microphone")
-    print(currently_microphone)  
 
-    
-    freq_1 = freq
-    Asyn_1 = df[currently_microphone]
-    min_value  = Asyn_1.min()            
-    max_value  = Asyn_1.max()   
- 
-    fig = plotter.generate_synthesis_plot_BF(freq_1, Asyn_1, Atrue, Asyn_history)
-    
+const selectFiles = function(targetFileInputId){
+  /*
+  let input = document.createElement('input');
+  input.type = "file";
+  input.onchange = _=>{
+      let files = Array.from(input.files);
+      console.log(files);
+  };
+  input.click(); */
+  $("#" + targetFileInputId).click();
+}
 
-    if result_type_1 == 1:  
-        fig.update_xaxes(range=[0, 2000])
-        fig.update_yaxes(row=1, col=1, range=[min_value, max_value])        
-    if result_type_2 == 1:  
-        fig.update_xaxes(range=[0, 2000])
-        fig.update_yaxes(row=1, col=1, range=[min_value, max_value])          
-    if result_type_3 == 1:  
-        fig.update_xaxes(range=[0, 2000])
-        fig.update_yaxes(row=1, col=1, range=[min_value, max_value])          
-            
+  // Hàm cập nhật thuộc tính accept dựa trên radio được chọn
+function updateAcceptAttribute() {
+  const punchRadio = document.getElementById('BodySideFileType_punch');
+  const csvRadio = document.getElementById('BodySideFileType_csv');
+  const fileInput = document.getElementById('body-mount-pch-selector');
 
-    graph_json = json.dumps({"status": True,
-                             "meta": {"resp_labels": "",
-                                      "update_resp_labels": "",
-                                      "num_mounts": ""},
-                             "data": fig}, cls=plotly.utils.PlotlyJSONEncoder)
-  except Exception as err:
-    print("exception")  
-    err_msg = type(err).__name__  + ": " + str(err) + "".join(traceback.format_tb(err.__traceback__))
-    print(err_msg + "\n".join(traceback.format_tb(err.__traceback__)))
-    graph_json = json.dumps({"status": False, "meta": {"num_mounts": opts.num_mounts}, "data": err_msg})
-    return graph_json
-  return graph_json
+  if (csvRadio.checked) {
+    fileInput.accept = ".csv";
+  } else if (punchRadio.checked) {
+    fileInput.accept = ".pch";
+  }
+  }
 
-@app.route('/export_csv_bf', methods=['GET', 'POST'])
-def export_csv_bf():
-    inputs = request.get_json()
 
-    result_type_1 = inputs["r1"]    
-    result_type_2 = inputs["r2"]
-    result_type_3 = inputs["r3"]   
-    result_type_4 = inputs["r4"]       
-    microphone_id = inputs["response_allnodeid"]
 
-    print("microphone_id =")    
-    print(microphone_id)   
-
-    folder_path = current_path + '\\BlockedForce\\SPL_BF'  # Thay bằng đường dẫn thư mục chứa file CSV
-    folder_path_Octave = current_path + '\\BlockedForce\\SPL_BF_3rdOctave'
-    folder_path_changefreq = current_path + '\\BlockedForce\\SPL_BF_changefreq'    
-    freq = None
-    value = []
-    file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
+const displaySelectedFiles = function(fileSelectorHandle, htmlDisplayId){
+  selectedFiles = fileSelectorHandle.files;
+  displayObj = $("#" + htmlDisplayId);
+  if (selectedFiles.length == 0) return;
   
-    
-    for file_name in file_list:
-        file_path = os.path.join(folder_path, file_name)
-        file_path_Octave = os.path.join(folder_path_Octave, file_name) 
-        file_path_changefreq = os.path.join(folder_path_changefreq, file_name)         
-        df = pd.read_csv(file_path)
-        df_Octave = pd.read_csv(file_path_Octave)
-        df_changefreq = pd.read_csv(file_path_changefreq)   
-
-        if result_type_1 == 1 :
-            result_type ="Mag"
-            freq = df_changefreq.iloc[:, 0].tolist()            
-            value_col = df_changefreq.iloc[:, int(2)].apply(safe_float)
-        if result_type_2 == 1 :
-            result_type ="dB"            
-            freq = df_changefreq.iloc[:, 0].tolist()             
-            value_col = df_changefreq.iloc[:, int(3)].apply(safe_float)        
-        if result_type_3 == 1 :
-            result_type ="dBA"              
-            freq = df_changefreq.iloc[:, 0].tolist()             
-            value_col = df_changefreq.iloc[:, int(4)].apply(safe_float) 
-        if result_type_4 == 1 :
-            result_type ="dBA_OneThirdOctaveband"              
-            freq = df_Octave.iloc[:, 0].tolist()             
-            value_col = df_Octave.iloc[:, int(1)].apply(safe_float)  
-        value.append(value_col.tolist())
-
-    micro_list = []
-
-    for f in os.listdir(folder_path):
-        full_path = os.path.join(folder_path, f)
-        if os.path.isfile(full_path):
-            name_without_ext = os.path.splitext(f)[0]
-            micro_list.append(name_without_ext)
-        
-    df = pd.DataFrame({'freq': freq})
-
-    # Thêm các cột dữ liệu cho từng micro
-    for i, micro_name in enumerate(micro_list):
-        # Kiểm tra độ dài value[i] có bằng độ dài freq không
-        if len(value[i]) != len(freq):
-            print(f"Warning: length mismatch for micro {micro_name}")
-        df[micro_name] = value[i]
-
-    currently_microphone= inputs["currently_microphone"] 
-    print("currently_microphone")
-    print(currently_microphone)  
-
-    
-    freq_1 = freq
-    Asyn_1 = df[currently_microphone]
-
-    df = pd.DataFrame({
-        'freq': freq_1,
-        'Asyn': Asyn_1
+  if (displayObj.prop('tagName').toLowerCase() == "select"){
+    displayObj.empty();
+    $.each(selectedFiles, (idx, file)=>{
+      displayObj.append( $("<option>", {value: idx, text: file.name}) );
+    });
+  } else if (displayObj.prop('tagName').toLowerCase() == "input" && displayObj.prop("type").toLowerCase() == "text"){
+    names = "";
+    $.each(selectedFiles, (idx, file)=>{
+      if (!names)
+        names = file.name;
+      else
+        names += ", " + file.name; 
     })
-    df.replace([np.inf, -np.inf], 0, inplace=True)
-    # Xuất ra file CSV
+    displayObj.val(names);
+  }
+}
 
-    
-    now = datetime.datetime.now()
-    timestamp = now.strftime("%Y%m%d_%H%M%S")  # Ví dụ: 20250730_164558
-    
-    
-    save_folder = os.getcwd() + "\\BlockedForce\\BlockedForce_Output"
-    file_name = currently_microphone + "_" + result_type + "_" + timestamp + ".csv"
-    file_path = save_folder + "\\" + file_name
-    df.to_csv(file_path, index=False)    
-    return{"status": True, "save_folder": save_folder, "file_name": file_name}
 
-@app.route('/export_csv_allAcousticNode_bf', methods=['GET', 'POST'])
-def export_csv_allAcousticNode_bf():
-    inputs = request.get_json()
-
-    result_type_1 = inputs["r1"]    
-    result_type_2 = inputs["r2"]
-    result_type_3 = inputs["r3"]   
-    result_type_4 = inputs["r4"]       
-    microphone_id = inputs["response_allAcousticNodeID"]
-
-    print("microphone_id =")    
-    print(microphone_id)   
-
-    folder_path = current_path + '\\BlockedForce\\SPL_BF'  # Thay bằng đường dẫn thư mục chứa file CSV
-    folder_path_Octave = current_path + '\\BlockedForce\\SPL_BF_3rdOctave'
-    folder_path_changefreq = current_path + '\\BlockedForce\\SPL_BF_changefreq'    
-    freq = None
-    value = []
-    file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
+const loadDB = function(){
+  $("#btn-load-db").text("Loading...")
+  selectedFiles = $("#db-selector").prop('files');
+  if (selectedFiles.length == 0){
+    $("#btn-load-db").text("No database!");
+    $("#btn-load-db").css("cssText", "background-color: #C75476")
+    setTimeout( ()=>{
+      $("#btn-load-db").text("Load");
+      $("#btn-load-db").css("cssText", "background-color: DodgerBlue");
+    }, 1000);
+    return;
+  }
   
-    
-    for file_name in file_list:
-        file_path = os.path.join(folder_path, file_name)
-        file_path_Octave = os.path.join(folder_path_Octave, file_name) 
-        file_path_changefreq = os.path.join(folder_path_changefreq, file_name)         
-        df = pd.read_csv(file_path)
-        df_Octave = pd.read_csv(file_path_Octave)
-        df_changefreq = pd.read_csv(file_path_changefreq)   
-
-        if result_type_1 == 1 :
-            result_type ="Mag"
-            freq = df_changefreq.iloc[:, 0].tolist()            
-            value_col = df_changefreq.iloc[:, int(2)].apply(safe_float)
-        if result_type_2 == 1 :
-            result_type ="dB"            
-            freq = df_changefreq.iloc[:, 0].tolist()             
-            value_col = df_changefreq.iloc[:, int(3)].apply(safe_float)        
-        if result_type_3 == 1 :
-            result_type ="dBA"              
-            freq = df_changefreq.iloc[:, 0].tolist()             
-            value_col = df_changefreq.iloc[:, int(4)].apply(safe_float) 
-        if result_type_4 == 1 :
-            result_type ="dBA_OneThirdOctaveband"              
-            freq = df_Octave.iloc[:, 0].tolist()             
-            value_col = df_Octave.iloc[:, int(1)].apply(safe_float)  
-        value.append(value_col.tolist())
+  let fd = new FormData();
+  fd.append('file', selectedFiles[0]);
+  $.ajax({
+    type: "POST",
+    url: "/load_db",
+    data: fd,
+    contentType: false,
+    cache: false,
+    processData: false,
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"]){
+        getDBInfo();
+        updateGraph(true);
+      }
+      $("#btn-load-db").text("Done!");
+      $("#btn-load-db").css("cssText", "background-color: #4CAF50")
+      setTimeout( ()=>{
+        $("#btn-load-db").text("Load");
+        $("#btn-load-db").css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+    }  
+  });
+}
 
 
-    micro_list = [x.strip() for x in microphone_id.split(',')]
-    
-    print("micro_list =")    
-    print(micro_list) 
+const clearDB = function(){
+  execButton = $("#dlg-btn-yes");
+  execButton.text("Processing...");
+  document.getElementById('txt-body-mount-pch-selector').value = "";  
+  document.getElementById('txt-en-mount-pch-selector').value = "";       
+  document.getElementById('txt-chart_note').value = "";   
+  document.getElementById('txt-mp-selector').value = "";     
+  document.getElementById('cbx-avl-mount-selector').value = "";
 
-    
-    df = pd.DataFrame({'freq': freq})
-
-    # Thêm các cột dữ liệu cho từng micro
-    for i, micro_name in enumerate(micro_list):
-        # Kiểm tra độ dài value[i] có bằng độ dài freq không
-        if len(value[i]) != len(freq):
-            print(f"Warning: length mismatch for micro {micro_name}")
-        df[micro_name] = value[i]
-        
-    df.replace([np.inf, -np.inf], 0, inplace=True)
-    # Xuất ra file CSV
-    now = datetime.datetime.now()
-    timestamp = now.strftime("%Y%m%d_%H%M%S")  # Ví dụ: 20250730_164558
-    save_folder = os.getcwd() + "\\BlockedForce\\BlockedForce_Output"
-    file_name =  "All_" + timestamp + ".csv"    
-#    file_name = micro_list[currently_microphone_id] + "_" + result_type + "_" + timestamp + ".csv"
-    file_path = save_folder + "\\" + file_name
-    df.to_csv(file_path, index=False) 
-    
-    excel_file = current_path + "\\templates\\template.xlsm"   
-    save_as_path = save_folder + "\\All_" + result_type + "_" + timestamp + ".xlsm" 
-    file_name = "All_" + result_type + "_" + timestamp + ".xlsm"
-    output_file = copy_csv_to_xlsm_and_run_macro(file_path, excel_file,save_as_path)    
-    return {"status": True, "file_name": file_name , "save_folder":save_as_path}
-
-@app.route('/export_csv_allBodyNode_bf', methods=['GET', 'POST'])
-def export_csv_allBodyNode_bf():
-    inputs = request.get_json()
-
-    result_type_1 = inputs["r1"]    
-    result_type_2 = inputs["r2"]
-    result_type_3 = inputs["r3"]   
-    result_type_4 = inputs["r4"]       
-    microphone_id = inputs["response_allBodyNodeID"]
-
-    print("microphone_id =")    
-    print(microphone_id)   
-    micro_list = [x.strip() for x in microphone_id.split(',')]
-    
-    new_names = []
-    for nid in micro_list:
-        new_names.append(str(nid) + "_ax")
-        new_names.append(str(nid) + "_ay")
-        new_names.append(str(nid) + "_az")
-    
-    print("new_names")    
-    print(new_names)     
-    folder_path = current_path + '\\BlockedForce\\SPL_BF'  # Thay bằng đường dẫn thư mục chứa file CSV
-    folder_path_Octave = current_path + '\\BlockedForce\\SPL_BF_3rdOctave'
-    folder_path_changefreq = current_path + '\\BlockedForce\\SPL_BF_changefreq'    
-    freq = None
-    value = []
-    file_list = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
+  document.getElementById('txt-eng-mount-ids').value = "80001, 80002, 80003";   
+  document.getElementById('txt-avl-mount-ids').value = "80001, 80002, 80003";     
+  document.getElementById('txt-body-mount-ids').value = "1000, 1001, 1002";
   
+
+  $.ajax({
+    type: "POST",
+    url: "/clear_db",
+    data: JSON.stringify({"signal": "clear"}),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"]){
+        getDBInfo();
+        updateGraph(true);
+      }
+      execButton.text("Done!");
+      execButton.css("cssText", "background-color: #4CAF50");
+      closeClearDBConfirmationDialog();
+      setTimeout( ()=>{
+        execButton.text("Yes");
+        execButton.css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+    }
+  });
+}
+
+
+const backupDB = function(){
+  let execButton = $("#btn-backup-db");
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        execButton.text("Checking...");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/backup_db",
+    data: JSON.stringify({"signal": "backup"}),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"] == "nodata"){
+        execButton.text("No Data!");
+        execButton.css("cssText", "background-color: #C75476")
+      } else if (response["status"] == "ok"){
+        const link = document.createElement("a");
+        link.href = "/download/backup/" + response["downloadToken"];
+        link.dispatchEvent(new MouseEvent('click'));
+      }
+      setTimeout( ()=>{
+        execButton.text("Backup Database");
+        execButton.css("cssText", "background-color: LightSteelBlue");
+      }, 1000);
+    }
+  });
+}
+
+
+
+
+const isPositiveInt = function(val){
+  let num = Number(val);
+  return Number.isInteger(num) && num > 0;
+}
+
+
+const isPositiveFloat = function(val){
+  let num = Number(val);
+  return !isNaN(num) && num > 0;
+}
+
+
+const trimCharStart = function(text, char) {
+  const trimStartRegEx = new RegExp("^" + char + "+");
+  return text.replace(trimStartRegEx, "");
+}
+
+const trimCharEnd = function(text, char) {
+  const trimEndRegEx = new RegExp(char + "+$");
+  return text.replace(trimEndRegEx, "");
+}
+
+const trimChar = function(text, char){
+  return trimCharEnd(trimCharStart(text, char), char);
+}
+
+
+const validateInputNids = function(inputFieldId, checkEnough=true){
+  let input = $("#" + inputFieldId).val();
+  if (!input.trim()) return false;
+  let inputItems = trimChar(input, ",").split(",");
+  if (checkEnough && inputItems.length != BUILDER_NUM_MOUNTS) return false;
+  let test = true;
+  inputItems.every( (item)=>{
+    if ( !isPositiveInt(item) ){ test = false; return false; }
+    return true;
+  });
+  return test;
+}
+
+
+const validateInputMountProperty = function(inputFieldId, allowNegative=false) {
+  let val = $("#" + inputFieldId).val();
+  if (!val.trim()) return false;
+  if (!allowNegative && !isPositiveFloat(val)) return false;
+  if (allowNegative && isNaN(Number(val)) ) return false;
+  return true;
+}
+
+
+const validateInputMountPropertyFields = function(){
+  for (let idx = 1; idx <= BUILDER_NUM_MOUNTS; idx++){
+    if ( !validateInputMountProperty("txt-sls" + idx + "-c1") ) return false;
     
-    for file_name in file_list:
-        file_path = os.path.join(folder_path, file_name)
-        file_path_Octave = os.path.join(folder_path_Octave, file_name) 
-        file_path_changefreq = os.path.join(folder_path_changefreq, file_name)         
-        df = pd.read_csv(file_path)
-        df_Octave = pd.read_csv(file_path_Octave)
-        df_changefreq = pd.read_csv(file_path_changefreq)   
-
-        if result_type_1 == 1 :
-            result_type ="Mag"
-            freq = df_changefreq.iloc[:, 0].tolist()            
-            value_col = df_changefreq.iloc[:, int(2)].apply(safe_float)
-        if result_type_2 == 1 :
-            result_type ="dB"            
-            freq = df_changefreq.iloc[:, 0].tolist()             
-            value_col = df_changefreq.iloc[:, int(3)].apply(safe_float)        
-        if result_type_3 == 1 :
-            result_type ="dBA"              
-            freq = df_changefreq.iloc[:, 0].tolist()             
-            value_col = df_changefreq.iloc[:, int(4)].apply(safe_float) 
-        if result_type_4 == 1 :
-            result_type ="dBA_OneThirdOctaveband"              
-            freq = df_Octave.iloc[:, 0].tolist()             
-            value_col = df_Octave.iloc[:, int(1)].apply(safe_float)  
-        value.append(value_col.tolist())
-
-    micro_list_all = []
-
-    for f in os.listdir(folder_path):
-        full_path = os.path.join(folder_path, f)
-        if os.path.isfile(full_path):
-            name_without_ext = os.path.splitext(f)[0]
-            micro_list_all.append(name_without_ext)
-            
-    print("micro_list_all =")    
-    print(micro_list_all) 
-
+    if ( !validateInputMountProperty("txt-sls" + idx + "-c2") ) return false;
     
-    df = pd.DataFrame({'freq': freq})
-
-    # Thêm các cột dữ liệu cho từng micro
-    for i, micro_name in enumerate(new_names):
-        # Kiểm tra độ dài value[i] có bằng độ dài freq không
-        if len(value[i]) != len(freq):
-            print(f"Warning: length mismatch for micro {micro_name}")
-        df[micro_name] = value[i]
-        
-    df.replace([np.inf, -np.inf], 0, inplace=True)
-    # Xuất ra file CSV
-    now = datetime.datetime.now()
-    timestamp = now.strftime("%Y%m%d_%H%M%S")  # Ví dụ: 20250730_164558
-    save_folder = os.getcwd() + "\\BlockedForce\\BlockedForce_Output"
-    file_name =  "All_" + result_type + "_" + timestamp + ".csv"    
-#    file_name = micro_list[currently_microphone_id] + "_" + result_type + "_" + timestamp + ".csv"
-    file_path = save_folder + "\\" + file_name
-    df.to_csv(file_path, index=False) 
+    if ( !validateInputMountProperty("txt-sls" + idx + "-d1", true) ) return false;
     
-    excel_file = current_path + "\\templates\\template.xlsm"   
-    save_as_path = save_folder + "\\All_" + result_type + "_" + timestamp + ".xlsm" 
-    file_name = "All_" + result_type + "_" + timestamp + ".xlsm"
-    output_file = copy_csv_to_xlsm_and_run_macro(file_path, excel_file,save_as_path)    
-    return {"status": True, "file_name": file_name , "save_folder":save_as_path}
+    for (let dirIdx=1; dirIdx <= 3; dirIdx++)
+      if ( !validateInputMountProperty("txt-ftab" + idx + "-k" + dirIdx) ) return false;
+  }
+  return true;
+}
 
 
-def copy_csv_to_xlsm_and_run_macro(csv_path, excel_path, save_as_file):
-    import os
-    import pandas as pd
-    from openpyxl import load_workbook
-    import win32com.client as win32
+const validateInputMountingAngle = function(dirLabel){
+  let input = $("#txt-en-angle-" + dirLabel).val();
+  if (!input.trim()) return false;
+  return !isNaN(Number(input));
+}
 
-    # Đọc dữ liệu CSV
-    df = pd.read_csv(csv_path)
 
-    # Tên sheet mới lấy từ tên file CSV (không có phần mở rộng)
-    sheet_name = os.path.splitext(os.path.basename(csv_path))[0]
+const validateInputMountingAngleFields = function (){
+  let dirLabels = ["x", "y", "z"];
+  for (let dirLabel of dirLabels){
+    if (!validateInputMountingAngle(dirLabel)) return false;
+  }
+  return true;
+}
 
-    # Mở workbook giữ macro
-    wb = load_workbook(excel_path, keep_vba=True)
 
-    # Xóa sheet "Sheet1" nếu tồn tại
-    if "Sheet1" in wb.sheetnames:
-        std = wb["Sheet1"]
-        wb.remove(std)
+const validators = {
+  validateInputNidFields: function (){
+    return (validateInputNids("txt-eng-mount-ids") && validateInputNids("txt-body-mount-ids")
+            && validateInputNids("txt-avl-mount-ids") && validateInputNids("txt-response-id", false) );
+  },
+  validateInputMountPropertyFields: validateInputMountPropertyFields,
+  validateInputMountingAngleFields: validateInputMountingAngleFields,
+  validateInputFilesSelected: function (){
+    engPchFiles = $("#en-mount-pch-selector").prop('files');
+    bodyPchFiles = $("#body-mount-pch-selector").prop('files');
+    avlFiles = $("#avl-mount-selector").prop('files');
+    return engPchFiles.length > 0 && bodyPchFiles.length > 0 && avlFiles.length > 0;
+  }
+}
 
-    # Tạo sheet mới
-    ws = wb.create_sheet(title=sheet_name)
 
-    # Ghi header
-    for c_idx, col_name in enumerate(df.columns, 1):
-        ws.cell(row=1, column=c_idx, value=col_name)
+const validateDatabaseBuildingUserInputs = function(){
 
-    # Ghi dữ liệu dataframe vào sheet mới
-    for r_idx, row in enumerate(df.itertuples(index=False), 2):
-        for c_idx, value in enumerate(row, 1):
-            ws.cell(row=r_idx, column=c_idx, value=value)
+  validateItems = {"validateInputMountingAngleFields": "Invalid mounting angles",
+                   "validateInputNidFields": "Invalid node ids",
+                   "validateInputFilesSelected": "No files selected!"};
 
-    # Lưu workbook giữ macro
-    wb.save(save_as_file)
-    wb.close()
+  for ( const [validatorName, errMessage] of Object.entries(validateItems) ){
+    if (!validators[validatorName]()){
+      $("#btn-create-db").text(errMessage);
+      $("#btn-create-db").css("cssText", "background-color: #C75476")
+      setTimeout( ()=>{
+        $("#btn-create-db").text("Build Database");
+        $("#btn-create-db").css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+      return false;
+    }
+  }
+  return true;
+}
 
-    macro_name = "CreateXYCharts"
-    # Mở Excel và chạy macro
-    excel = win32.DispatchEx("Excel.Application")
-    excel.Visible = False
-    workbook = excel.Workbooks.Open(os.path.abspath(save_as_file))
 
-    try:
-        excel.Application.Run(f"'{os.path.basename(save_as_file)}'!{macro_name}")
-    except Exception as e:
-        print("Fail", e)
-    else:
-        print("Successful!")
-    workbook.Save()
-    workbook.Close()
-    excel.Quit()
 
-    return save_as_file  # Trả về đường dẫn file đã tạo
+const getMountProperties = function(){
+  const mountIds = $("#txt-avl-mount-ids").val().split(",");
+  for (const [idx, mountId] of mountIds.entries())
+    mountIds[idx] = Number(mountId.trim());
 
+  const mountProperties = {}
+  for (let idx=1; idx <= BUILDER_NUM_MOUNTS; idx++) {
+    const container = $("#mount-param-sub-panel-" + idx);
+    const cbxMountType = container.find(".cbx-mount-type");
+    const mountType = cbxMountType.find(":selected").text();
+    const dynStiffness = {};
+    let isFixedInExcite = false;
+    let matrixType = "none";
+    if (mountType.toLowerCase() == "flexible"){
+      matrixType = container.find(".mount-stiff-matrix-type-opts-container > input[type='radio']:checked").val().toLowerCase();
+      const addedParamTableContainers = container.find("div.mount-param-div");
+      const checkbox = container.find(".fix-checkbox-container > input[type='checkbox']");
+      isFixedInExcite = checkbox.prop("checked");
+
+      addedParamTableContainers.each( (_, paramTableDOMContainer) => {
+        const paramTableContainer = $(paramTableDOMContainer);
+        const matrixTerm = paramTableContainer.attr("matrix-term");
+        const stiffnessLabel = matrixTerm.length == 3
+                               ? matrixTerm.slice(0, 2) + "-" + matrixTerm.charAt(0) + matrixTerm.charAt(2)
+                               : matrixTerm;
+
+        const dataRows = paramTableContainer.find("tr.data-row");
+        dynStiffness[stiffnessLabel] = [];
+        dataRows.each( (key, item)=>{
+          //each row
+          const stiffnessAtFreq = []
+          $(item).find("input").each( (idx, input) => {
+            //each cell
+            let value = $(input).val();
+            let numVal = Number(value);
+            if (idx == 0 && !value.trim() && isNaN(numVal) ) return false;
+            if (isNaN(numVal)) value = 0.0;
+            stiffnessAtFreq.push(numVal);
+          });
+          if (stiffnessAtFreq.length)
+            dynStiffness[stiffnessLabel].push(stiffnessAtFreq);
+        });
+      })
+    }
     
-if __name__ == "__main__":
-  Timer(1, open_browser).start()
-  delete_old_file()
-  app.run(host="127.0.0.1", port=5000)
+    mountProperties[mountIds[idx - 1]] = {
+      "mountType": mountType,
+      "matrixType": matrixType,
+      "fixedInExcite": isFixedInExcite,
+      "dynStiffness": dynStiffness
+    }
+  }
+  console.log(mountProperties)
+  return mountProperties;
+}
 
+
+const createDB = function(){
+  let execButton = $("#btn-create-db");
+  execButton.text("Building...");
+  engPchFiles = $("#en-mount-pch-selector").prop('files');
+  bodyPchFiles = $("#body-mount-pch-selector").prop('files');
+  avlFiles = $("#avl-mount-selector").prop('files');
+  MountParamFiles = $("#mp-selector").prop('files');  
+  
+  let isInputOk = validateDatabaseBuildingUserInputs();
+  if (!isInputOk) return;
+  
+  let k = document.getElementById("BodySideFileType_punch").checked ? 1 : 2;
+  console.log("Value k =", k);
+  let k_mount = document.getElementById("MountFile_Yes").checked ? 1 : 2;
+  console.log("Value k_mount =", k_mount); 
+  
+ 
+ 
+  
+  let fd = new FormData();
+  fd.append('BodySideType',k)
+  fd.append('MountParaFile_yesno',k_mount)  
+
+  
+  $.each(engPchFiles, (idx, file)=>{
+    fd.append('enPchFiles', file)
+  })
+  
+  $.each(bodyPchFiles, (idx, file)=>{
+    fd.append('bodyPchFiles', file)
+  })
+  
+  $.each(avlFiles, (idx, file)=>{
+    fd.append('avlFiles', file)
+  })
+  
+  $.each(MountParamFiles, (idx, file)=>{
+    fd.append('MountParamFiles', file)
+  })
+  
+  
+  fd.append("numMounts", BUILDER_NUM_MOUNTS);
+  
+  fd.append("modelName", $("#txt-model-name").val().substring(0, 128));
+  
+  fd.append("loadAtFinish", $("#load-created-db").prop("checked"));
+  
+  fd.append("engMountIds", $("#txt-eng-mount-ids").val());
+  
+  fd.append("bodyMountIds", $("#txt-body-mount-ids").val());
+  
+  fd.append("avlMountIds", $("#txt-avl-mount-ids").val());
+  
+  fd.append("responseId", $("#txt-response-id").val());
+  
+  fd.append("remarks", $("#txt-remark").val().substring(0, 300));
+  
+  const engineAngles = [
+    $("#txt-en-angle-x").val(),
+    $("#txt-en-angle-y").val(),
+    $("#txt-en-angle-z").val()
+  ];
+      
+  fd.append("engineAngles", engineAngles);
+  
+  let mountParams = getMountProperties();
+  
+  fd.append("mountParams", JSON.stringify(mountParams));
+  
+  $.ajax({
+    type: "POST",
+    url: "/create_db",
+    data: fd,
+    contentType: false,
+    cache: false,
+    processData: false,
+    dataType: "json",
+    success: (response)=>{
+      if (!response["status"]){
+        execButton.text("Error Occured!");
+        execButton.css("cssText", "background-color: #C75476")
+        setTimeout( ()=>{
+          execButton.text("Build Database");
+          execButton.css("cssText", "background-color: DodgerBlue");
+        }, 1000);
+        return;
+      }
+
+      if ($("#load-created-db").prop("checked")){
+        getDBInfo();
+        updateGraph(true);
+      }
+      const link = document.createElement("a");
+      link.href = "/download/creation/" + response["downloadToken"];
+      link.dispatchEvent(new MouseEvent('click'));
+      execButton.text("Done!");
+      execButton.css("cssText", "background-color: #4CAF50")
+      setTimeout( ()=>{
+        execButton.text("Build Database");
+        execButton.css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+    }
+  });
+}
+
+
+
+const clearDBInfo = function(){
+  $("#dbinfo-model-name").empty();
+  $("#dbinfo-eng-angles").empty();
+  $("#dbinfo-eng-rot").empty();
+  $("#dbinfo-mount-nids").empty();
+  $("#dbinfo-mic-nid").empty();
+  $("#dbinfo-mount-params").empty();
+  $("#dbinfo-remark").empty();
+  $("#dbinfo-mount-params").empty();
+  $("#dbinfo-remark").empty();  
+  
+}
+
+
+const getDBInfo = function(){
+  clearDBInfo();
+  $.ajax({
+    type: "POST",
+    url: "/get_db_info",
+    data: JSON.stringify({"signal": "get_db_info"}),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"] != "ok"){ 
+        updateRpmList([]);
+        updateMicrophoneList([]);
+        return;
+      }
+      const dbinfo = response["data"];
+      NUM_MOUNTS = dbinfo["num_mounts"];
+	  document.getElementById('txt-mount-num').value = NUM_MOUNTS;
+      FLEX_MOUNT_IDXS = dbinfo["flex_mount_idxs"];
+      writeSynthesisEquations();
+      createTuningSliders();
+      bindMathTermHighlightEvent();
+      
+      $("#dbinfo-model-name").text(dbinfo["model_name"]);
+      $("#dbinfo-eng-pch").text(dbinfo["eng_pch"]);
+      $("#dbinfo-body-pch").text(dbinfo["body_pch"]);
+      
+      let engAngleDisplayObj = $("#dbinfo-eng-angles");
+      engAngleDisplayObj.append(
+        "Rx: " + dbinfo["engine_angles"][0]
+        + ";   Ry: " + dbinfo["engine_angles"][1]
+        + ";   Rz: " + dbinfo["engine_angles"][2]
+      );
+      
+      $("#dbinfo-eng-rot").text(dbinfo["rpm_list"].join(", "));
+      updateRpmList(dbinfo["rpm_list"]);
+      let mountIdDisplayObj = $("#dbinfo-mount-nids");
+      const mountNids = ["", "", ""];
+      const dataname = ["avl_nids", "eng_nids", "body_nids"];
+      $.each(dataname, (nameIdx, dname)=>{
+        $.each(dbinfo[dname], (idx, val)=>{
+          if (idx == 0)
+            mountNids[nameIdx] += val;
+          else
+            mountNids[nameIdx] += ", " + val;
+        });
+      });
+      
+      mountIdDisplayObj.append(
+        `<table class="inner-table">
+          <tr><td>EXCITE nids:</td>
+          <td>${mountNids[0]}</td></tr>
+          <tr><td>Engine-sided mount nids:</td>
+          <td>${mountNids[1]}</td></tr>
+          <tr><td>Body-sided mount nids:</td>
+          <td>${mountNids[2]}</td></tr>
+        </table>`
+      );
+      
+      $("#dbinfo-mic-nid").text(dbinfo["response_id"].join(", "));
+      updateMicrophoneList(dbinfo["response_id"]);
+      const mountParamDisplayObj = $("#dbinfo-mount-params");
+      if (dbinfo["mount_param_type"] == "kelvin-voigt") {
+        mountParamDisplayObj.append(writeVoigtMountParamInfo(dbinfo["mount_params"]));
+      } else {
+        mountParamDisplayObj.append(writeMountDynStiffnessInfo(dbinfo["avl_nids"], dbinfo["mount_params"]).children());
+      }
+      $("#dbinfo-remark").text(dbinfo["remarks"]);
+    } // end success
+  });
+}
+
+
+
+const writeVoigtMountParamInfo = function(mountParams){
+  const mountParamTable = $("<table>", {class: "inner-table"});
+  mountParamTable.append(
+    `<thead>
+       <tr>
+         <th rowspan="2">Mount #</td>
+         <th rowspan="2">Excite NID</td>
+         <th colspan="3">SLS element</td>
+         <th colspan="3">FTAB element</td>
+       </tr>
+       <tr>
+         <th>c1</td>
+         <th>c2</td>
+         <th>d1</td>
+         <th>kx</td>
+         <th>ky</td>
+         <th>kz</td>
+       </tr> 
+     </thead>`);
+  let midx = 1;
+  $.each(mountParams, (mnid, Magram)=>{
+    mountParamTable.append(
+      `<tr>
+         <th>Mount #${midx}</th>
+           <td class="right-align">${mnid}</td>
+           <td class="right-align">${Magram["sls"]["c1"]}</td>
+           <td class="right-align">${Magram["sls"]["c2"]}</td>
+           <td class="right-align">${Magram["sls"]["d1"]}</td>
+           <td class="right-align">${Magram["ftab"]["kx"]}</td>
+           <td class="right-align">${Magram["ftab"]["ky"]}</td>
+           <td class="right-align">${Magram["ftab"]["kz"]}</td>
+       </tr>`);
+      midx++;
+  });
+  return mountParamTable;
+}
+
+
+const writeMountDynStiffnessInfo = function(avlNids, mountParams){
+  const container = $("<div>");
+  const NUM_TABLES_PER_ROW = 3;
+
+  for (let nid of avlNids){
+    const Magrams = mountParams[nid];
+    const mountDiv = $('<div class="dbinfo-single-mount-param-container">')
+    const collapsible = $("<button>");
+    collapsible.addClass("collapsible");
+    const label = $("<span>");
+    label.text("Mount NID " + nid);
+    collapsible.append(label);
+    const fixedInExcite = (Magrams["mount_type"] != "rigid" && Magrams["fixed_in_excite"]) ? " (Fixed in EXCITE)": "";
+    const outputClassName = Magrams["mount_type"] == "rigid" ? "dbinfo-rigid-mount-label" : "dbinfo-flex-mount-label";
+    const matrixType = Magrams["mount_type"] != "rigid" ? "/" + Magrams["matrix_type"] : "";
+    const output = $("<output>");
+    output.attr("readonly", "")
+          .addClass(outputClassName)
+          .val(capitalizeFirstLetter(Magrams["mount_type"]) + matrixType + fixedInExcite);
+    collapsible.append(output);
+    collapsible.click(onMountInfoPanelExpansionBtnClicked);
+    mountDiv.append(collapsible);
+    const dynstiffContainer = $('<div class="dbinfo-dynstiff-container">');
+    const mountAxes = ["TX", "TY", "TZ", "RX", "RY", "RZ"];
+    if (Magrams["mount_type"] == "flexible"){
+      let numAddedTables = 0;
+      let rowContainer;
+      for (let targetAxis of mountAxes){
+        for (let sourceAxis of mountAxes){
+          const datasetName = targetAxis + "-" + sourceAxis;
+          const tableName = targetAxis.charAt(0) == sourceAxis.charAt(0)
+                            ? targetAxis + sourceAxis.charAt(1)
+                            : datasetName;
+          if (!Magrams["dyn_stiffness"].hasOwnProperty(datasetName))
+            continue;
+
+          if (numAddedTables % NUM_TABLES_PER_ROW == 0){
+            numAddedTables++;
+            rowContainer = $('<div class="dbinfo-dynstiff-row-container">');
+            dynstiffContainer.append(rowContainer);
+          }
+
+          const axisDynstiffContainer = $('<div class="dbinfo-axis-dynstiff-container">');
+          const table = $("<table>");
+          table.append("<caption>" + tableName + " Dynamic Stiffness</caption>");
+          table.append("<tr><th>Freq</th><th>Real</th><th>Imag</th></tr>");
+          const data = Magrams["dyn_stiffness"][datasetName];
+          for (let idx=0; idx < data.length; idx++){
+            const rowData = data[idx];
+            table.append('<tr><td class="right-align">' + rowData[0] + '</td><td class="right-align">' + rowData[1] + '</td><td class="right-align">' + rowData[2] + '</td></tr>');
+          }
+          axisDynstiffContainer.append(table);
+          rowContainer.append(axisDynstiffContainer);
+        }
+      }
+    }
+    mountDiv.append(collapsible);
+    mountDiv.append(dynstiffContainer);
+    container.append(mountDiv);
+    dynstiffContainer.hide();
+  }
+  return container;
+}
+
+
+const EquationType = Object.freeze({
+  FULL: 0,
+  SINGLE_MOUNT: 1,
+  TPA: 2
+})
+
+
+
+
+const writeBodyTargetEquationTerms = function(numMounts, eqType=EquationType.FULL){
+  let latex = `\\attr{math-term-group-id=bodyTarget}{\\class{math-term-group}{\\left[\\begin{array}{${"c".repeat(numMounts)}}`;
+  if (eqType == EquationType.FULL) {
+    for (let col=1; col <= numMounts; col++){
+      latex += `\\attr{math-term-id=bodyTargetH-${col}}{\\class{math-term}{\\mathbf{H}_{${col}r}^B}}` + (col == numMounts ? "" : "&");
+    }
+  } else {
+    for (let row=1; row <= numMounts; row++){
+      for (let col=1; col <= numMounts; col++){
+        if (col == row){
+          latex += `\\attr{math-term-id=bodyTargetH-${col}}{\\class{math-term}{\\mathbf{H}_{${col}r}^B}}` + (col == numMounts ? "" : "&");
+        } else {
+          latex += "\\mathbf{0}" + (col == numMounts ? "" : "&");
+        }
+      }
+      if (row != numMounts)
+        latex += "\\\\";
+    }
+  }
+  latex += "\\end{array}\\right]}}";
+  return latex;
+}
+
+const writeBodyBodyEquationTerms = function(numMounts, eqType=EquationType.FULL){
+  let latex = `\\attr{math-term-group-id=bodyMount}{\\class{math-term-group}{\\left[\\begin{array}{${"c".repeat(numMounts)}}`;
+  for (let row=1; row <= numMounts; row++){
+    for (let col=1; col <= numMounts; col++){
+      if (eqType == EquationType.SINGLE_MOUNT && row != col){
+        latex += "\\mathbf{0}" + (col == numMounts ? "" : "&");
+      } else {
+        latex += `\\attr{math-term-id=bodyMountH-${row}-${col}}{\\class{math-term}{\\mathbf{H}_{${row}-${col}}^B}}` + (col == numMounts ? "" : "&");
+      }
+    }
+    if (row != numMounts)
+      latex += "\\\\";
+  }
+  latex += "\\end{array}\\right]}}";
+  return latex;
+}
+
+const writeEngineEngineEquationTerms = function(numMounts, eqType=EquationType.FULL){
+  let latex = `\\attr{math-term-group-id=enMount}{\\class{math-term-group}{\\left[\\begin{array}{${"c".repeat(numMounts)}}`;
+  for (let row=1; row <= numMounts; row++){
+    for (let col=1; col <= numMounts; col++){
+      if (eqType == EquationType.SINGLE_MOUNT && row != col){
+        latex += "\\mathbf{0}" + (col == numMounts ? "" : "&");
+      } else {
+        latex += `\\attr{math-term-id=enMountH-${row}-${col}}{\\class{math-term}{\\mathbf{H}_{${row}-${col}}^E}}` + (col == numMounts ? "" : "&");
+      }
+    }
+    if (row != numMounts)
+      latex += "\\\\";
+  }
+  latex += "\\end{array}\\right]}}";
+  return latex;
+}
+
+const writeMountStiffnessEquationTerms = function(numMounts, flexMountIdxs){
+  const setFlexMountIdxs = new Set(flexMountIdxs);
+  let latex = `\\omega^2\\attr{math-term-group-id=mountK}{\\class{math-term-group}{\\left[\\begin{array}{${"c".repeat(numMounts)}}`;
+  for (let row=1; row <= numMounts; row++){
+    for (let col=1; col <= numMounts; col++){
+      if (row != col){
+        latex += "\\mathbf{0}" + (col == numMounts ? "" : "&");
+        continue;
+      }
+      if (!setFlexMountIdxs.has(row - 1)) {
+        latex += "\\mathbf{0}" + (col == numMounts ? "" : "&");
+        continue;
+      }
+      latex += `\\attr{math-term-id=mountK-${row}}{\\class{math-term}{\\mathbf{K}_{${row}}^{-1}}}` + (col == numMounts ? "" : "&");
+    }
+    if (row != numMounts)
+      latex += "\\\\";
+  }
+  latex += "\\end{array}\\right]}}";
+  return latex;
+}
+
+const writeExciteAccelEquationTerms = function(numMounts){
+  let latex = `\\attr{math-term-group-id=AVLAcc}{\\class{math-term-group}{\\left[\\begin{array}{c}`;
+  for (let row=1; row <= numMounts; row++){
+    latex += `\\attr{math-term-id=AVLAcc-${row}}{\\class{math-term}{\\mathbf{A}_${row}^E}}`;
+    if (row != numMounts)
+      latex += "\\\\";
+  }
+  latex += "\\end{array}\\right]}}";
+  return latex;
+}
+
+const writeResponseAccelEquationTerms = function(numMounts, eqType=EquationType.FULL){
+  let latex = `\\left[\\begin{array}{c}`;
+  if (eqType == EquationType.FULL)
+    return latex + "\\mathbf{A}_r^B\\end{array}\\right]";
+
+  for (let row=1; row <= numMounts; row++){
+    latex += `\\mathbf{A}_{r/m${row}}^B`;
+    if (row != numMounts)
+      latex += "\\\\";
+  }
+  if (eqType == EquationType.SINGLE_MOUNT)
+    return latex + "\\end{array}\\right]_{\\text{single-mount}}";
+  return latex + "\\end{array}\\right]_{\\text{TPA}}";
+}
+
+const writeSynthesisEquationByEqType = function(eqType=EquationType.FULL){
+  let latex = writeResponseAccelEquationTerms(NUM_MOUNTS, eqType);
+  latex += "=" + writeBodyTargetEquationTerms(NUM_MOUNTS, eqType) 
+            + "\\left(" 
+            + writeBodyBodyEquationTerms(NUM_MOUNTS, eqType)
+            + "-"
+            + writeMountStiffnessEquationTerms(NUM_MOUNTS, FLEX_MOUNT_IDXS)
+            + "+"
+            + writeEngineEngineEquationTerms(NUM_MOUNTS, eqType)
+            + "\\right)^{-1}"
+            + writeExciteAccelEquationTerms(NUM_MOUNTS);
+  return "\\begin{equation}" + latex + "\\end{equation}";
+}
+
+const writeSynthesisEquations = function(){
+  const fullEq = writeSynthesisEquationByEqType(EquationType.FULL);
+  const singleMountEq = writeSynthesisEquationByEqType(EquationType.SINGLE_MOUNT);
+  const tpaEq = writeSynthesisEquationByEqType(EquationType.TPA);
+  $("#equation-full").text(fullEq);
+  $("#equation-single-mount").text(singleMountEq);
+  $("#equation-transfer-path").text(tpaEq);
+  if (MathJax.Hub) {
+    MathJax.Hub.Config({TeX:{MAXBUFFER: 25600}});
+    MathJax.Hub.Queue(["Typeset", MathJax.Hub, $("#equation-full")[0]]);
+    MathJax.Hub.Queue(["Typeset", MathJax.Hub, $("#equation-single-mount")[0]]);
+    MathJax.Hub.Queue(["Typeset", MathJax.Hub, $("#equation-transfer-path")[0]]);
+  }
+}
+
+
+  
+function handle_EngineSideMount_name(astr) {
+
+  console.log("handle_EngineSideMount_name"); 	
+  str1 = astr.replace(/(?!^)(H)/g, ",$1");
+
+  let str2 = str1.split(",");
+
+  let str3 = str2.map(item => item.replace("[±50%]: 0", ""));
+  str4 = str3.map(item => item.replace("[±50%]", ""));
+  str5 = str4.map(item => item.replace(":", ":"));
+  str6 = str5.map(item => item.replace("H", "HE"));  
+
+  str7 = str6.filter(item => item !== "");
+
+  let filtered = str7.filter(item => item.includes(" "));
+
+  let filtered_join = filtered.join("_");
+  let result = simplifyAllKStrings(filtered_join.replace(/\s+/g, ""), ["HE1", "HE2", "HE3", "HE4", "HE5"], ['-1', '-2', '-3', '-4', '-5'] );    
+
+  return result  
+}
+
+function handle_BodySideMount_name(astr) {
+	
+  console.log("handle_BodySideMount_name"); 	
+  str1 = astr.replace(/(?!^)(H)/g, ",$1");
+
+
+  let str2 = str1.split(",");
+
+  let str3 = str2.map(item => item.replace("[±50%]: 0", ""));
+  str4 = str3.map(item => item.replace("[±50%]", ""));
+  str5 = str4.map(item => item.replace(":", ":"));
+  str6 = str5.map(item => item.replace("H", "HB"));  
+
+  str7 = str6.filter(item => item !== "");
+
+  let filtered = str7.filter(item => item.includes(" "));
+
+  let filtered_join = filtered.join("_");
+  let result = simplifyAllKStrings(filtered_join.replace(/\s+/g, ""), ["HB1", "HB2", "HB3", "HB4", "HB5"], ['-1', '-2', '-3', '-4', '-5']  );  
+
+  return result  
+}
+
+function handle_BodyTargetMount_name(astr) {
+  console.log("handle_BodyTargetMount_name"); 	
+  str1 = astr.replace(/(?!^)(H)/g, ",$1");
+ 
+
+  let str2 = str1.split(",");
+
+  let str3 = str2.map(item => item.replace("[±50%]: 0", ""));
+  str4 = str3.map(item => item.replace("[±50%]", ""));
+  str5 = str4.map(item => item.replace(":", ":"));
+  str6 = str5.map(item => item.replace("H", "HBr"));  
+
+  str7 = str6.filter(item => item !== "");
+
+  let filtered = str7.filter(item => item.includes(" "));
+
+  let filtered_join = filtered.join("_");
+
+  let result = simplifyAString_MountAcce (filtered_join.replace(/\s+/g, ""), "HBr", 5);    
+
+  return result  
+}
+
+function simplifyKString(str, prefix, axes) {
+  const items = str.split("_");
+//  const axes = ['x', 'y', 'z'];
+  const values = [];
+
+  for (let i = 0; i < axes.length; i++) {
+    const key = `${prefix}${axes[i]}`;
+    const item = items.find(el => el.startsWith(key + ":"));
+    if (!item) {
+      // Nếu không tìm thấy phần tử nào, trả về chuỗi gốc
+      return str;
+    }
+    const val = item.split(":")[1];
+    values.push(val);
+  }
+
+  const firstVal = values[0];
+  const allEqual = values.every(v => v === firstVal);
+
+  if (allEqual) {
+    return `${prefix}:${firstVal}`;
+  } else {
+    return str;
+  }
+}
+
+function simplifyAllKStrings(str,prefixes,axes) {
+//  const prefixes = ["K1", "K2", "K3", "K4", "K5"];
+  const results = [];
+
+  for (const prefix of prefixes) {
+    const simplified = simplifyKString(str, prefix, axes);
+    // Nếu kết quả khác chuỗi gốc, tức là đã rút gọn
+    if (simplified !== str) {
+      results.push(simplified);
+    }
+  }
+
+  // Nếu không có gì rút gọn, trả về chuỗi gốc
+  if (results.length === 0) return str;
+
+  // Nối các kết quả rút gọn bằng dấu gạch dưới
+  return results.join("_");
+}
+
+function handle_MountStiff_name(astr) {
+  console.log("handle_MountStiff_name"); 	
+  str1 = astr.replace(/(?!^)(K)/g, ",$1");
+//  console.log("str1");  
+ // console.log(str1); 
+  let str2 = str1.split(",");
+  // Duyệt từng phần tử và thay thế "[±50%]: 0" bằng ""
+  let str3 = str2.map(item => item.replace("[±50%]: 0", ""));
+  str4 = str3.map(item => item.replace("[±50%]", ""));
+  str5 = str4.map(item => item.replace(":", ":"));
+  // Lọc bỏ các phần tử rỗng (nếu có)
+  str7 = str5.filter(item => item !== "");
+  // Bước 5: giữ lại phần tử có khoảng trắng
+  let filtered = str7.filter(item => item.includes(" "));
+  // Bước 6: nối lại thành chuỗi
+  let filtered_join = filtered.join("_");
+  let result = simplifyAllKStrings(filtered_join.replace(/\s+/g, ""), ["K1", "K2", "K3", "K4", "K5"], ['x', 'y', 'z'] );  
+//  console.log("result");  
+//  console.log(result);
+  return result  
+}
+
+const simplifyAString_MountAcce = function(str, word, number) {
+  const items = str.split("_");
+  const values = [];
+
+  // Lấy các giá trị của các phần tử bắt đầu bằng 'A' và có số từ 1 đến 5
+  for (let i = 1; i <= number; i++) {
+    const key = word + `${i}`;
+    const item = items.find(el => el.startsWith(key + ":"));
+    if (!item) {
+      // Nếu không tìm thấy phần tử nào, trả về chuỗi gốc
+      return str;
+    }
+    const val = item.split(":")[1];
+    values.push(val);
+  }
+
+  // Kiểm tra tất cả giá trị có giống nhau không
+  const firstVal = values[0];
+  const allEqual = values.every(v => v === firstVal);
+
+  if (allEqual) {
+    return word + firstVal;
+  } else {
+    return str; // Trả về chuỗi gốc nếu không thỏa điều kiện
+  }
+};
+
+function handle_MountAcce_name(astr) {
+  console.log("handle_MountAcce_name"); 	
+  str1 = astr.replace(/(?!^)(A)/g, ",$1");
+//  console.log("str1");  
+//  console.log(str1); 
+  let str2 = str1.split(",");
+  // Duyệt từng phần tử và thay thế "[±50%]: 0" bằng ""
+  let str3 = str2.map(item => item.replace("[±50%]: 0", ""));
+  str4 = str3.map(item => item.replace("[±50%]", ""));
+  str5 = str4.map(item => item.replace(":", ":"));
+  // Lọc bỏ các phần tử rỗng (nếu có)
+  str7 = str5.filter(item => item !== "");
+  // Bước 5: giữ lại phần tử có khoảng trắng
+  let filtered = str7.filter(item => item.includes(" "));
+  // Bước 6: nối lại thành chuỗi
+  let filtered_join = filtered.join("_");
+  let result = simplifyAString_MountAcce (filtered_join.replace(/\s+/g, ""), "A", 5); 
+   
+//  console.log("result");  
+//  console.log(result);
+  return result
+}
+
+
+
+const sensitive = function(resetRpmList=false){
+  updateGraph_Mount_Acce_Excite_sensitive()
+  updateGraph_Body_Target_Mount_sensitive()
+}	
+
+const updateGraph_Mount_Acce_Excite_sensitive = function(resetRpmList=false){
+	
+// Chọn radio TPA (id=transfer-path)
+  $('#transfer-path').prop('checked', true);
+  updateGraph_withoutPlot(true)
+// Check checkbox A-Weight (id=a-weight)
+  $('#a-weight').prop('checked', true);
+  updateGraph_withoutPlot(true)
+// Check checkbox 3rd-Octave (id=oct3rd)
+  $('#oct3rd').prop('checked', true);
+  updateGraph_withoutPlot(true)  
+  
+
+  let userOpts = getUserOptions();
+  let notiText = $("#noti").text();
+  if (resetRpmList) userOpts["rpm"] = null;
+  updateControllerDisplay(userOpts);
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        $("#noti").css("cssText", "visibility: visible");
+        $("#noti").text("Processing... Please wait");
+        $("#noti").css("cssText", "color: #C75476");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/updateGraph_Mount_Acce_Excite_sensitive",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      plotGraph(response);
+      if (response["meta"]["update_resp_labels"]){
+        updateResponseLabelList(response["meta"]["resp_labels"]);
+      }
+      $("#noti").text("Done!");
+      $("#noti").css("cssText", "color: #4CAF50");
+
+      setTimeout( ()=>{
+      execButton.text("(1)_Sensitive_Mount_Acce_Excite");
+      execButton.css("cssText", "background-color: DodgerBlue");
+    }, 1000);	  
+	  
+	  
+    }
+  });
+
+  $('#transfer-path').prop('checked', false);
+  $('#full-sensitivity').prop('checked', true);   
+  $('#a-weight').prop('checked', false);
+  $('#oct3rd').prop('checked', false);
+}
+
+const updateGraph_Body_Target_Mount_sensitive = function(resetRpmList=false){
+	
+// Chọn radio TPA (id=transfer-path)
+  $('#transfer-path').prop('checked', true);
+  updateGraph_withoutPlot(true)
+// Check checkbox A-Weight (id=a-weight)
+  $('#a-weight').prop('checked', true);
+  updateGraph_withoutPlot(true)
+// Check checkbox 3rd-Octave (id=oct3rd)
+  $('#oct3rd').prop('checked', true);
+  updateGraph_withoutPlot(true)  
+  
+
+  let userOpts = getUserOptions();
+  let notiText = $("#noti").text();
+  if (resetRpmList) userOpts["rpm"] = null;
+  updateControllerDisplay(userOpts);
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        $("#noti").css("cssText", "visibility: visible");
+        $("#noti").text("Processing... Please wait");
+        $("#noti").css("cssText", "color: #C75476");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/updateGraph_Body_sensitive",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      plotGraph(response);
+      if (response["meta"]["update_resp_labels"]){
+        updateResponseLabelList(response["meta"]["resp_labels"]);
+      }
+      $("#noti").text("Done!");
+      $("#noti").css("cssText", "color: #4CAF50");
+      setTimeout( ()=>{
+        $("#noti").css("cssText", "color: #C75476");
+        $("#noti").text(notiText);
+        $("#noti").css("cssText", "visibility: hidden");
+      }, 1000);
+    }
+  });
+
+  $('#transfer-path').prop('checked', false);
+  $('#full-sensitivity').prop('checked', true);   
+  $('#a-weight').prop('checked', false);
+  $('#oct3rd').prop('checked', false);
+}
+
+const updateGraph_withoutPlot = function(resetRpmList=false){
+  let userOpts = getUserOptions();
+  let notiText = $("#noti").text();
+  if (resetRpmList) userOpts["rpm"] = null;
+
+  updateControllerDisplay(userOpts);
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        $("#noti").css("cssText", "visibility: visible");
+        $("#noti").text("Processing... Please wait");
+        $("#noti").css("cssText", "color: #C75476");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/update_graph",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+//      plotGraph(response);
+      if (response["meta"]["update_resp_labels"]){
+        updateResponseLabelList(response["meta"]["resp_labels"]);
+      }
+      $("#noti").text("Done!");
+      $("#noti").css("cssText", "color: #4CAF50");
+      setTimeout( ()=>{
+        $("#noti").css("cssText", "color: #C75476");
+        $("#noti").text(notiText);
+        $("#noti").css("cssText", "visibility: hidden");
+      }, 1000);
+    }
+  });
+}
+
+
+
+// BlockedForce
+function BF_updateAcceptAttribute() {
+  const punchRadio = document.getElementById('BF_BodySideFileType_punch');
+  const csvRadio = document.getElementById('BF_BodySideFileType_csv');
+  const fileInput = document.getElementById('BF_body-mount-pch-selector');
+
+  if (csvRadio.checked) {
+    fileInput.accept = ".csv";
+  } else if (punchRadio.checked) {
+    fileInput.accept = ".pch";
+  }
+  }
+
+document.getElementById('BF_BodySideFileType_punch').addEventListener('change', BF_updateAcceptAttribute);
+document.getElementById('BF_BodySideFileType_csv').addEventListener('change', BF_updateAcceptAttribute);
+
+window.addEventListener('DOMContentLoaded', BF_updateAcceptAttribute);
+
+
+const initGraph_BlockedForce = function(){
+  let notiText = $("#noti").text();
+  const radio_result_Mag = document.getElementById("result_Mag");
+  radio_result_Mag.checked = true;
+  const radio_body = document.getElementById("BF_ResultType_structure");
+  const radio_acoustic = document.getElementById("BF_ResultType_acoustic");	
+  radio_acoustic.checked = true;
+  document.getElementById("BF_txt-response-id").value = "2001, 2002, 2003";
+  document.getElementById("BF_txt-body-response-id").value = "10000, 10001, 10002";
+  document.getElementById("txt-df_2").value = "6.25";  
+  $("#BF_ResultType_acoustic").show();
+  $("#BF_ResultType_acoustic_label").show();
+  $("#Export_Acoustic_button").show()	
+  $("#Export_Body_button").show()
+  $("#BF_ResultType_structure").show()
+  $("#BF_ResultType_structure_label").show();  
+BF_ResultType_structure
+
+  
+  $.ajax({
+    xhr: ()=>{
+      let xhr = new window.XMLHttpRequest();
+      xhr.addEventListener("loadstart", (evt)=>{
+        $("#noti").css("cssText", "visibility: visible");
+        $("#noti").text("Graph is loading... Please wait");
+        $("#noti").css("cssText", "color: #C75476");
+      }, false);
+      return xhr;
+    },
+    type: "POST",
+    url: "/init_graph_BlockedForce",
+    data: JSON.stringify({"signal": "init"}),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      plotGraph(response);
+      plotGraph_BlockedForce(response);	  
+      if (response["meta"]["update_resp_labels"]){
+        updateResponseLabelList(response["meta"]["resp_labels"]);
+      }
+      $("#noti").text("Done!");
+      $("#noti").css("cssText", "color: #4CAF50");
+      setTimeout( ()=>{
+        $("#noti").css("cssText", "color: #C75476");
+        $("#noti").text(notiText);
+        //$("#noti").css("cssText", "visibility: hidden");
+      }, 1000);
+    }
+  });
+  
+  document.getElementById('BF_txt-body-mount-pch-selector').value = ''  
+  document.getElementById('BF_body-mount-pch-selector').value = ''  
+  document.getElementById('BF_txt_cbx-avl-mount-selector').value = ''
+  document.getElementById('BF_avl-mount-selector').value = ''
+  document.getElementById('cbx-microphone-id_2').value = ''  
+  document.getElementById('txt-df_2').value = '6.25'  
+}
+
+const getUserOptions_blockedforce = function(){
+
+  let opts = {
+    "no_cross": document.querySelector("#single-mount").checked,
+    "compute_contrib": document.querySelector("#transfer-path").checked,
+  };
+  
+  let r1 = document.getElementById("result_Mag").checked ? 1 : 0;
+  console.log("Value r1 =", r1);
+  let r2 = document.getElementById("result_dB").checked ? 1 : 0;
+  console.log("Value r2 =", r2);  
+  let r3 = document.getElementById("result_dBA").checked ? 1 : 0;
+  console.log("Value r3 =", r3);  
+  let r4 = document.getElementById("result_dBA_3rd-Octave").checked ? 1 : 0;
+  console.log("Value r4 =", r4);   
+  let df_2 = document.getElementById("txt-df_2").value
+  console.log("txt-df_2", df_2); 
+  let response_allnodeid = document.getElementById("BF_txt-response-id").value 
+  let response_allAcousticNodeID = document.getElementById("BF_txt-response-id").value 
+  let response_allBodyNodeID = document.getElementById("BF_txt-body-response-id").value 
+   
+
+  const selectElem = document.getElementById('cbx-microphone-id_2');
+  const currently_microphone = selectElem.options[selectElem.selectedIndex].text;
+  console.log("currently_microphone", currently_microphone);
+  
+  
+
+  opts["response_allAcousticNodeID"] = response_allAcousticNodeID;
+  opts["response_allBodyNodeID"] = response_allBodyNodeID;  
+
+  opts["r1"] = r1;
+  opts["r2"] = r2;  
+  opts["r3"] = r3;  
+  opts["r4"] = r4;    
+ 
+  
+  let bf_pres_reflevel = document.getElementById("bf_txt-ref-pres").value
+  let bf_acce_reflevel = document.getElementById("bf_txt-ref-acce").value 
+  
+  opts["bf_pres_reflevel"] = bf_pres_reflevel;
+  opts["bf_acce_reflevel"] = bf_acce_reflevel;  
+  
+  opts["df_2"] = df_2;
+  opts["response_allnodeid"] = response_allnodeid;   
+  opts["currently_microphone"] = currently_microphone;   
+  
+  
+
+  
+  let avlFactors = {};
+  for (let colIdx = 1; colIdx <= NUM_MOUNTS; colIdx++){
+    avlFactors["H-" + colIdx] = parseFloat( $("#AVLAcc-" + colIdx).val() ) / 100.0 + 1.0;
+    if (isNaN(avlFactors["H-" + colIdx]))
+      avlFactors["H-" + colIdx] = 1.0;
+  }
+
+  opts["avl_mount_factors"] = avlFactors;
+  console.log("avl_mount_factors", avlFactors); 
+
+  
+  let engineMountFactors = {};
+  for (let rowIdx = 1; rowIdx <= NUM_MOUNTS; rowIdx++){
+    for (let colIdx = 1; colIdx <= NUM_MOUNTS; colIdx++){
+      let label = "-" + rowIdx + "-" + colIdx;
+      engineMountFactors["H" + label] = parseFloat( $("#enMountH" + label).val() ) / 100.0 + 1.0;
+      if (isNaN(engineMountFactors["H" + label]))
+        engineMountFactors["H" + label] = 1.0;
+    }
+  }
+  opts["engine_mount_factors"] = engineMountFactors;
+  console.log("engine_mount_factors", engineMountFactors); 
+  
+  
+  let mountFactors = {};
+  for (let rowIdx of FLEX_MOUNT_IDXS){
+    for (let colIdx = 1; colIdx <= 3; colIdx++){
+      let label = "-" + (rowIdx + 1) + "-" + colIdx;
+      mountFactors["H" + label] = parseFloat( $("#mountK" + label).val() ) / 100.0 + 1.0;
+      if (isNaN(mountFactors["H" + label]))
+        mountFactors["H" + label] = 1.0;
+    }
+  }
+  opts["mount_factors"] = mountFactors;
+  console.log("mount_factors", mountFactors); 
+
+  let bodyMountFactors = {};
+  for (let rowIdx = 1; rowIdx <= NUM_MOUNTS; rowIdx++){
+    for (let colIdx = 1; colIdx <= NUM_MOUNTS; colIdx++){
+      let label = "-" + rowIdx + "-" + colIdx;
+      bodyMountFactors["H" + label] = parseFloat( $("#bodyMountH" + label).val() ) / 100.0 + 1.0;
+      if (isNaN(bodyMountFactors["H" + label]))
+        bodyMountFactors["H" + label] = 1.0;
+    }
+  }
+  opts["body_mount_factors"] = bodyMountFactors;
+  console.log("body_mount_factors", bodyMountFactors); 
+  
+  
+  let bodyTargetFactors = {};
+  for (let colIdx = 1; colIdx <= NUM_MOUNTS; colIdx++){
+    bodyTargetFactors["H-" + colIdx] = parseFloat( $("#bodyTargetH-" + colIdx).val() ) / 100.0 + 1.0;
+    if (isNaN(bodyTargetFactors["H-" + colIdx]))
+      bodyTargetFactors["H-" + colIdx] = 1.0;
+  }
+  opts["body_target_factors"] = bodyTargetFactors;
+  console.log("body_target_factors", bodyTargetFactors); 
+
+  
+  opts["invisible_groups"] = getInvisibleGroups();
+  opts["zoom_range"] = getCurrentZoomRange();
+  opts["show_history"] = $("#show-history").prop("checked");
+  opts["show_db"] = $("#show-db").prop("checked");
+  opts["a_weight"] = $("#a-weight").prop("checked");
+  opts["chart_height"] = $("#chart-height").val();
+  opts["rpm"] = $("#cbx-rpm-selector").find(":selected").text();
+  opts["response_id"] = $("#cbx-microphone-id").find(":selected").text();
+  
+  opts["target_resp_label"] = $("#cbx-response-label").find(":selected").text();
+
+
+  
+  opts["oct3rd"] = $("#oct3rd").prop("checked");
+  opts["no_rot"] = $("#no-rot").prop("checked");
+  opts["df"] = parseFloat($("#txt-df").val());
+
+  return opts;
+}
+
+const updateMicrophoneList_BlockedForce = function(microphoneList){
+  let cbxCtrl_2 = $("#cbx-microphone-id_2");
+  cbxCtrl_2.empty();
+  console.log("microphoneList", microphoneList);
+  $.each(microphoneList, (idx, item)=>{
+    cbxCtrl_2.append( $("<option>", {value: idx, text: item}) );
+	
+  })
+  console.log("cbxCtrl_2", cbxCtrl_2);
+  ;
+}
+
+const updateDB_BlockedForce = function(){
+
+  BF_bodyFiles = $("#BF_body-mount-pch-selector").prop('files');
+  console.log(BF_bodyFiles);
+  BF_ReactionForceFiles = $("#BF_avl-mount-selector").prop('files');
+  console.log(BF_ReactionForceFiles);  
+
+  let k = document.getElementById("BF_BodySideFileType_punch").checked ? 1 : 2;
+  console.log("Value k =", k);
+  
+  let h = document.getElementById("BF_ResultType_acoustic").checked ? 1 : 2;
+  console.log("Value h =", h);
+
+  
+  let BF_fd = new FormData();
+  BF_fd.append('BF_BodySideType',k)
+  BF_fd.append('BF_ResultType',h)
+  
+  $.each(BF_bodyFiles, (idx, file)=>{
+    BF_fd.append('BF_bodyFiles', file)
+  })
+  
+  $.each(BF_ReactionForceFiles, (idx, file)=>{
+    BF_fd.append('BF_ReactionForceFiles', file)
+  })
+
+  var selected = $("input[name='resultType']:checked").attr('id');
+
+  if (selected === "BF_ResultType_acoustic") {
+	BF_fd.append("BF_responseId", $("#BF_txt-response-id").val());
+  } else if (selected === "BF_ResultType_structure") {
+	BF_fd.append("BF_responseId", $("#BF_txt-body-response-id").val());
+  }
+
+  BF_fd.append("BF_body_responseId", $("#BF_txt-body-response-id").val());  
+
+  BF_fd.append("BF_bodymountId", $("#BF_txt-body-mount-ids").val());  
+  
+  BF_fd.append("BF_loadAtFinish", $("#BF_load-created-db").prop("checked"));  
+  
+  $.ajax({
+    type: "POST",
+    url: "/update_db_BlockedForce",
+    data: BF_fd,
+    contentType: false,
+    cache: false,
+    processData: false,
+    dataType: "json",
+    success: (response)=>{
+      if (!response["status"]){
+        execButton.text("Error Occured!");
+        execButton.css("cssText", "background-color: #C75476")
+        setTimeout( ()=>{
+          execButton.text("Build Database");
+          execButton.css("cssText", "background-color: DodgerBlue");
+        }, 1000);
+        return;
+      }
+      const dbinfo = response["data"];
+      console.log(dbinfo["response_id"]);  	  
+      updateMicrophoneList_BlockedForce(dbinfo["response_id"]);	  
+      update_graph_BlockedForce(true);
+
+      setTimeout( ()=>{
+        execButton.text("Caculate");
+        execButton.css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+    }
+  });
+}
+  
+function checkBodyOutputNodeIds() {
+    const val = $("#BF_txt-body-response-id").val().trim();
+    if (val === "") {
+        $("#BF_ResultType_structure").hide();
+        $("#BF_ResultType_structure_label").hide();
+        $("#Export_Body_button").hide()	
+    } else {
+        $("#BF_ResultType_structure").show();
+        $("#BF_ResultType_structure_label").show();	
+        $("#Export_Body_button").show()			
+    }
+}
+
+function checkAcousticOutputNodeIds() {
+	const radio_body = document.getElementById("BF_ResultType_structure");
+	const radio_acoustic = document.getElementById("BF_ResultType_acoustic");	
+	radio_body.checked = true;
+
+    const val_acoustic = $("#BF_txt-response-id").val().trim();
+    const val_body = $("#BF_txt-body-response-id").val().trim();
+	
+    if (val_acoustic === "") {
+        $("#BF_ResultType_acoustic").hide();
+        $("#BF_ResultType_acoustic_label").hide();
+        $("#Export_Acoustic_button").hide()	
+    } else {
+		radio_acoustic.checked = true;
+        $("#BF_ResultType_acoustic").show();
+        $("#BF_ResultType_acoustic_label").show();
+        $("#Export_Acoustic_button").show()		
+    }
+}
+
+const createDB_BlockedForce = function(){
+  $("#bodyOutputNodeIds").on("input", checkBodyOutputNodeIds);
+  $(document).ready(checkBodyOutputNodeIds);
+  $("#acousticOutputNodeIds").on("input", checkAcousticOutputNodeIds);
+  $(document).ready(checkAcousticOutputNodeIds);   
+  const radio_result_Mag = document.getElementById("result_Mag");
+  radio_result_Mag.checked = true;
+  document.getElementById("txt-df_2").value = "6.25";  
+	
+  let execButton = $("#btn-createDB-BlockedForce");
+  execButton.text("Caculating...");  
+  BF_bodyFiles = $("#BF_body-mount-pch-selector").prop('files');
+  console.log(BF_bodyFiles);
+  BF_ReactionForceFiles = $("#BF_avl-mount-selector").prop('files');
+  console.log(BF_ReactionForceFiles);  
+
+  let k = document.getElementById("BF_BodySideFileType_punch").checked ? 1 : 2;
+  console.log("Value k =", k);
+  
+  let h = document.getElementById("BF_ResultType_acoustic").checked ? 1 : 2;
+  console.log("Value h =", h);
+  
+  let bf_pres_reflevel = document.getElementById("bf_txt-ref-pres").value
+  let bf_acce_reflevel = document.getElementById("bf_txt-ref-acce").value  
+ 
+
+  let BF_fd = new FormData();
+  BF_fd.append('BF_BodySideType',k)
+  BF_fd.append('BF_ResultType',h)
+  
+  BF_fd.append('bf_pres_reflevel',bf_pres_reflevel)  
+  BF_fd.append('bf_acce_reflevel',bf_acce_reflevel)  
+  
+  $.each(BF_bodyFiles, (idx, file)=>{
+    BF_fd.append('BF_bodyFiles', file)
+  })
+  
+  $.each(BF_ReactionForceFiles, (idx, file)=>{
+    BF_fd.append('BF_ReactionForceFiles', file)
+  })
+  BF_fd.append("BF_responseId", $("#BF_txt-response-id").val());
+  BF_fd.append("BF_body_responseId", $("#BF_txt-body-response-id").val());  
+  
+  
+  
+  BF_fd.append("BF_bodymountId", $("#BF_txt-body-mount-ids").val());  
+  
+  BF_fd.append("BF_loadAtFinish", $("#BF_load-created-db").prop("checked"));  
+  
+  $.ajax({
+    type: "POST",
+    url: "/create_db_BlockedForce",
+    data: BF_fd,
+    contentType: false,
+    cache: false,
+    processData: false,
+    dataType: "json",
+    success: (response)=>{
+      if (!response["status"]){
+        execButton.text("Error Occured!");
+        execButton.css("cssText", "background-color: #C75476")
+        setTimeout( ()=>{
+          execButton.text("Build Database");
+          execButton.css("cssText", "background-color: DodgerBlue");
+        }, 1000);
+        return;
+      }
+      const dbinfo = response["data"];
+      console.log(dbinfo["response_id"]);  	  
+      updateMicrophoneList_BlockedForce(dbinfo["response_id"]);	  
+      update_graph_BlockedForce(true);
+
+
+      execButton.text("Done!");
+      execButton.css("cssText", "background-color: #4CAF50")
+      setTimeout( ()=>{
+        execButton.text("Caculate");
+        execButton.css("cssText", "background-color: DodgerBlue");
+      }, 1000);
+    }
+  });
+ 
+}
+
+const plotGraph_BlockedForce = function(graphs){
+  let chartDiv = $("#chart_2");
+  if (graphs['status']){
+    chartDiv.text("");
+    // console.log(graphs["data"]);
+    Plotly.newPlot('chart_2', graphs['data'], {});
+  } else {
+    chartDiv.text(graphs['data']);
+    chartDiv.css('color', 'red');
+  }
+}
+
+const update_graph_BlockedForce = function(resetRpmList=false){
+  let userOpts = getUserOptions_blockedforce();
+  let notiText = $("#noti").text();
+  if (resetRpmList) userOpts["rpm"] = null;
+  updateControllerDisplay(userOpts);
+  $.ajax({
+
+    type: "POST",
+    url: "/update_graph_BlockedForce",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      plotGraph_BlockedForce(response);
+    }
+  });
+}
+
+function dBA_Octave_Display_Yesno(show) {
+    document.getElementById('result_dBA').style.display = show ? 'inline-block' : 'none';
+    document.getElementById('result_dBA_3rd-Octave').style.display = show ? 'inline-block' : 'none';
+    document.getElementById('result_dBA_label').style.display = show ? 'inline-block' : 'none';
+    document.getElementById('result_dBA_3rd-Octave_label').style.display = show ? 'inline-block' : 'none';	
+	updateDB_BlockedForce();
+  }
+
+
+
+const bf_downloadCsv = function(execButtonHandle){
+	
+  let userOpts = getUserOptions_blockedforce();
+  let notiText = $("#noti").text();
+
+  updateControllerDisplay(userOpts);
+  $.ajax({
+    type: "POST",
+    url: "/export_csv_allmicro_bf",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+
+      const downloadUrl = file_path;
+
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      let fileName;
+      fileName = response["filename"]	  
+      link.download = fileName; 
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);	
+    }
+  });
+}	
+
+const export_csv = function(resetRpmList=false){
+  let userOpts = getUserOptions_blockedforce();
+  let notiText = $("#noti").text();
+  if (resetRpmList) userOpts["rpm"] = null;
+
+  
+  updateControllerDisplay(userOpts);
+  $.ajax({
+    type: "POST",
+    url: "/export_csv_bf",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+		let save_folder_info = response["save_folder"];
+		let filename_info = response["file_name"];		
+		if (!response["status"]) {
+		alert('Failed to save.');			
+		} else {
+		console.log("File name =", filename_info);
+		console.log("Folder =", save_folder_info);
+		alert('Mount Parameter File was saved successfully!\nFile name: ' + filename_info + '\nFolder: ' + save_folder_info);
+		backup_csv(filename_info,save_folder_info)
+		}
+    }
+  });
+}
+
+const export_csv_allAcousticNode = function(){
+  let userOpts = getUserOptions_blockedforce();
+  let notiText = $("#noti").text();
+
+  let execButton = $("#Export_Acoustic_button");
+  execButton.text("Exporting........."); 
+  
+  updateControllerDisplay(userOpts);
+  $.ajax({
+    type: "POST",
+    url: "/export_csv_allAcousticNode_bf",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+		let save_folder_info = response["save_folder"];
+		let filename_info = response["file_name"];		
+		if (!response["status"]) {
+		alert('Failed to save.');			
+		} else {
+		console.log("File name =", filename_info);
+		console.log("Folder =", save_folder_info);			
+//		alert('Mount Parameter File was saved successfully!\nFile name: ' + filename_info + '\nFolder: ' + save_folder_info);
+		backup_csv(filename_info,save_folder_info)
+		}
+	setTimeout( ()=>{
+	execButton.text("Export all Acoustic node");
+	execButton.css("cssText", "background-color: DodgerBlue");
+    }, 1000);
+    }
+  });
+}
+
+const export_csv_allBodyNode = function(){
+  let userOpts = getUserOptions_blockedforce();
+  let notiText = $("#noti").text();
+  let execButton = $("#Export_Body_button");
+  execButton.text("Exporting........."); 
+  
+
+	
+  updateControllerDisplay(userOpts);
+  $.ajax({
+    type: "POST",
+    url: "/export_csv_allBodyNode_bf",
+    data: JSON.stringify(userOpts),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+		let save_folder_info = response["save_folder"];
+		let filename_info = response["file_name"];		
+		if (!response["status"]) {
+		alert('Failed to save.');			
+		} else {
+		console.log("File name =", filename_info);
+		console.log("Folder =", save_folder_info);			
+//		alert('Mount Parameter File was saved successfully!\nFile name: ' + filename_info + '\nFolder: ' + save_folder_info);
+		backup_csv(filename_info,save_folder_info)
+		}
+	setTimeout( ()=>{
+	execButton.text("Export all Body node");
+	execButton.css("cssText", "background-color: DodgerBlue");
+    }, 1000);  		
+    }
+  });
+}
+
+const backup_csv = function(a, b){
+  let execButton = $("#btn-backup-csv");
+  let csv_name = a;
+  let folder_path = b;  
+  $.ajax({
+    type: "POST",
+    url: "/backup_csv",
+    data: JSON.stringify({filename: csv_name, path: folder_path}),
+    contentType: "application/json",
+    dataType: "json",
+    success: (response)=>{
+      if (response["status"] == "nodata"){   
+        execButton.text("No Data!");
+        execButton.css("cssText", "background-color: #C75476");
+      } else if (response["status"] == "ok"){   
+        const link = document.createElement("a");
+        link.href = "/download_csv/" + response["downloadToken"];
+        link.dispatchEvent(new MouseEvent('click'));
+      }
+      setTimeout( ()=>{
+        execButton.text("Backup Database");
+        execButton.css("cssText", "background-color: LightSteelBlue");
+      }, 1000);   
+    }
+  });
+}
