@@ -1,1 +1,515 @@
 
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Transfer Function Synthesis Viewer</title>
+    <link rel="icon" type="imag/x-icon" href="./static/icon.ico">
+    <link rel="stylesheet" href="./static/style.css">    
+    <script src="./static/jquery.min.js"></script>
+    <script src="./static/plotly.min.js"></script>
+    <script src="./static/MathJax/MathJax.js?config=TeX-MML-AM_CHTML" id="MathJax-script" async></script>
+    <style>
+    #mountFileContainer {
+      display: none; 
+      margin-top: 10px;
+    }
+    </style>	
+  </head>
+  
+  
+  <body>
+    <div id="main">
+      <div id="left-panel">
+
+        <button type="button" class="collapsible">加速度入力</button>
+        <div id="database-builder" class="default-hide">
+		  <div id="equation-full" class="equation"><!--<img src="./static/img/full.jpg">--></div>
+		  <div id="equation-single-mount" class="equation"><!--<img src="./static/img/single_mount.jpg">--></div>
+		  <div id="equation-transfer-path" class="equation"><!--<img src="./static/img/rf_contrib.jpg">--></div>
+
+		  <button type="button" class="collapsible">Database_Builder</button>
+		  <div id="database-builder" class="default-hide">		
+		
+			  <label for="txt-model-name" class="lbl-model-name">Model name:</label>
+			  <input type="text" id="txt-model-name" class="txt-model-name" value="" maxlength="128" placeholder="...up to 128 characters">
+			  <p class="multiline-paragraph">
+				<label>Number of Mounts: </label>
+				<span class="input-group">
+				  <span class="input-group-btn">
+					<button type="button" class="btn btn-danger btn-number" data-type="minus" data-field="txt-mount-num">
+					  <span class="glyphicon glyphicon-minus"></span>
+					</button>
+				  </span>
+				  <input type="text" id="txt-mount-num"  name="txt-mount-num" class="form-control input-number" value="3" min="1" max="20">
+				  <span class="input-group-btn">
+					<button type="button" class="btn btn-success btn-number" data-type="plus" data-field="txt-mount-num">
+					  <span class="glyphicon glyphicon-plus"></span>
+					</button>
+				  </span>
+				</span>
+			  </p>
+			  <p id="en-angle-info">
+			  <label class="body_frf_file_type">Engine mount angles (deg):      </label>
+			  <label for="txt-en-angle-x" class="lbl-en-angle">rx</label>		  
+			  <input type="text" id="txt-en-angle-x" class="txt-en-angle" value="5" onchange="validateInputMountingAngleRealTime($(this));">
+			  <label for="txt-en-angle-y" class="lbl-en-angle">ry</label>
+			  <input type="text" id="txt-en-angle-y" class="txt-en-angle" value="0" onchange="validateInputMountingAngleRealTime($(this));">
+			  <label for="txt-en-angle-y" class="lbl-en-angle">rz</label>
+			  <input type="text" id="txt-en-angle-z" class="txt-en-angle" value="0" onchange="validateInputMountingAngleRealTime($(this));">
+			  </p>
+			  <p>
+				<label for="body-mount-pch-selector" class="body_frf_file_type" >Body FRF file type: </label>		  
+				<input type="radio" id="BodySideFileType_punch" class="txt-en-angle" name="BodySideFileType" value="punch_file" checked>
+				<label class="PUNCH-files" >PUNCH</label>
+				<input type="radio" id="BodySideFileType_csv" name="BodySideFileType" value="csv_file">
+				<label >CSV</label>
+			  </p>	
+			  
+			  <p>
+				<label for="body-mount-pch-selector" class="body_frf_file_type">Body FRF file: </label>
+				<button class="image-button" onclick="selectFiles('body-mount-pch-selector')">
+				  <img src="./static/img/open.gif" alt="open">
+				</button>
+				<input type="file" id="body-mount-pch-selector" onchange="displaySelectedFiles(this, 'txt-body-mount-pch-selector')" >
+				<input type="text" id="txt-body-mount-pch-selector" readOnly>
+
+				
+				<label for="txt-body-mount-ids" class="lbl-input-ids">Body mount node ids: </label>
+				<input type="text" id="txt-body-mount-ids" class="txt-input-ids" value="1000, 1001, 1002" onchange="validateInputNidsRealTime($(this))">
+
+				<label for="txt-response-id" class="lbl-input-ids">Body output node ids: </label>
+				<input type="text" id="txt-response-id" class="txt-mount-input-ids txt-long-input" value="2001,2002,2003" onchange="validateInputNidsRealTime($(this), false)">
+			  
+			  
+			  </p>
+			  <p>
+				<label for="en-mount-pch-selector" class="body_frf_file_type">Engine FRF file(pch): </label>
+				<button class="image-button" onclick="selectFiles('en-mount-pch-selector')">
+				  <img src="./static/img/open.gif" alt="open">
+				</button>
+				<input type="file" id="en-mount-pch-selector" onchange="displaySelectedFiles(this, 'txt-en-mount-pch-selector')" accept=".pch">
+				<input type="text" id="txt-en-mount-pch-selector" readOnly>
+				
+				<label for="txt-eng-mount-ids" class="lbl-input-ids">Engine mount node ids: </label>
+				<input type="text" id="txt-eng-mount-ids" class="txt-input-ids" value="80001, 80002, 80003" onchange="validateInputNidsRealTime($(this))">
+			  </p>
+	  
+			  <p>
+				<label for="avl-mount-selector" class="body_frf_file_type">Engine mount acceleration file(csv): </label>
+				<button class="image-button" onclick="selectFiles('avl-mount-selector')">
+				  <img src="./static/img/open.gif" alt="open">
+				</button>
+				<input  type="file" id="avl-mount-selector" onchange="displaySelectedFiles(this, 'cbx-avl-mount-selector')" multiple accept=".csv">
+				<input type="text" name="cbx-avl-mount-selector" id="cbx-avl-mount-selector" readOnly>
+				<label for="txt-avl-mount-ids" class="lbl-input-ids">Engine mount node ids: </label>
+				<input type="text" id="txt-avl-mount-ids" class="txt-input-ids" value="80001, 80002, 80003" onchange="fillMountIds()">
+			  </p>
+
+			  <p>
+				<label class="body_frf_file_type">Load Mount Stiffness setting file     (ファイル拡張子) ? </label>		  
+				<input type="radio" id="MountFile_Yes" name="MountFile_Yesno" value="yes" onclick="MountFile_Yesno(true)">
+				<label class="Mount_files_yes">YES</label>
+				<input type="radio" id="MountFile_No" name="MountFile_Yesno" value="no" onclick="MountFile_Yesno(false)" checked>
+				<label >NO</label>
+			  </p>
+			  <div id="mountFileContainer">
+			  <p>		  
+				<label>                               </label>
+				<button class="image-button" onclick="selectFiles('mp-selector')">
+				  <img src="./static/img/open.gif" alt="open">
+				</button>
+				<input type="file" id="mp-selector" onchange="displaySelectedFiles(this, 'txt-mp-selector')" accept=".txt">
+				<input type="text" id="txt-mp-selector" placeholder="Please input Mount Parameter file here." readOnly>
+			  </p>			
+			  </div>			
+			  <div id="mount-param-panel">
+			  </div> <!-- mount-param-panel-->
+		  
+			  <p>		  
+				<a window="blank" onclick="saveMountParam()" class="button" id="btn-save-mp">Save Mount Parameter</a>
+			  </p>	
+		  
+			  <p>
+				<textarea id="txt-remark" class="txt-remark" placeholder="Remarks (up to 300 characters)..."></textarea>
+			  </p>
+			  <p>
+				<input type="checkbox" id="load-created-db" checked>
+				<label for="load-created-db" class="free-size-label">Load the database after the creation</label>
+			  </p>
+			  <p>
+				<a window="blank" onclick="createDB()" class="button" id="btn-create-db">Build Database</a>
+
+			  </p>
+		  </div>
+		  <button type="button" class="collapsible">Post Processing</button>
+		  <div id="database-builder" class="default-hide">	
+		  
+
+			  <p>
+				<label for="txt-db-selector">Select database: </label>
+				<button class="image-button" onclick="selectFiles('db-selector')">
+				  <img src="./static/img/open.gif" alt="open">
+				</button>
+				<input type="file" id="db-selector" onchange="displaySelectedFiles(this, 'txt-db-selector')" accept=".h5">
+				<input type="text" id="txt-db-selector" readOnly>
+				<a window="blank" onclick="loadDB()" class="button" id="btn-load-db">Load</a>
+                <a window="blank" onclick="updateGraph_Mount_Acce_Excite_sensitive()" class="button" id="btn-create-db">(1)_Sensitive_Mount_Acce_Excite</a>				
+                <a window="blank" onclick="updateGraph_Body_Target_Mount_sensitive()" class="button" id="btn-create-db">(2)_Sensitive_Mount_Body_Target </a>	
+                <a window="blank" onclick="sensitive()" class="button" id="btn-create-db"> (1)(2)_Sensitive</a>				
+				<a window="blank" onclick="showClearDBConfirmationDialog()" class="button" id="btn-clear-db">Clear All</a>
+				<a window="blank" onclick="backupDB()" class="button" id="btn-backup-db">Backup Database</a>
+			  </p>
+
+			  <table>
+				<tbody>
+				<tr>
+				  <td>Model name:</td>
+				  <td id="dbinfo-model-name"></td>
+				</tr>
+				<tr>
+				  <td>Engine-side's PUNCH:</td>
+				  <td id="dbinfo-eng-pch"></td>
+				</tr>
+				<tr>
+				  <td>Body-side's PUNCH:</td>
+				  <td id="dbinfo-body-pch"></td>
+				</tr>
+				<tr>
+				  <td>Engine mounting angles (deg): </td>
+				  <td id="dbinfo-eng-angles"></td>
+				<tr>
+				  <td>Engine rotations:</td>
+				  <td id="dbinfo-eng-rot"></td>
+				</tr>
+				<tr>
+				  <td>Mount node ids:</td>
+				  <td id="dbinfo-mount-nids"></td>
+				</tr>
+				<tr>
+				  <td>Microphones' node id:</td>
+				  <td id="dbinfo-mic-nid"></td>
+				</tr>
+				<tr>
+				  <td>Mount parameters:</td>
+				  <td id="dbinfo-mount-params"></td>
+				</tr>
+				<tr>
+				  <td>Remarks:</td>
+				  <td id="dbinfo-remark"></td>
+				</tr>
+				</tbody>
+			  </table>	
+
+			<div class="form-row">
+			  <p>
+				<label for="cbx-microphone-id">Select sensor NID: </label>
+				<select name="cbx-microphone-id" id="cbx-microphone-id" readOnly onchange="updateGraph()"></select>
+			  </p>	
+			  <p>				  
+				<label for="cbx-response-label">Result component: </label>
+				<select name="cbx-response-label" id="cbx-response-label" readOnly onchange="updateGraph()"></select>
+			  </p>
+			  <p>		  
+				<label for="txt-df">Freq Interval: </label>
+				<input type="text" id="txt-df" class="txt-df" value="6.25" onchange="updateGraphRealTimeByFreqInterval($(this))">
+			  </p>	
+			  <p>				  
+				<label for="txt-ref-pres">Ref. pressure: </label>
+				<input type="text" id="txt-ref-pres" class="txt-ref-level" value="{{'%.0e' % pres_reflevel}}" onchange="updateGraphRealTimeByRefLevel($(this))">
+			  </p>	
+			  <p>				  
+				<label for="txt-ref-acce">Ref. Accel.: </label>
+				<input type="text" id="txt-ref-acce" class="txt-ref-level" value="{{'%.0e' % acce_reflevel}}" onchange="updateGraphRealTimeByRefLevel($(this))">
+			  </p>
+			</div>	
+
+			
+			  <div id="noti"></div>
+			  <div id="chart_1"></div>
+			  <p>
+				<textarea id="txt-chart_note" class="txt-chartnote" placeholder="Note for Chart ..."></textarea>
+			  </p>		  
+        </div>		
+	
+
+        </div> <!--DIV DATABASE BUILDER-->
+
+        <button type="button" class="collapsible">荷重入力</button>
+        <div id="database-builder" class="default-hide">		
+		
+			<button type="button" class="collapsible">Database_Builder</button>
+			<div id="database-builder" class="default-hide">
+		
+		
+			  <p class="multiline-paragraph">
+				<label class="free-size-label">注意：blocked forceを使う場合、Body FRFには、フルビークル状態のFRFが必要です。 </label>		  
+			  </p>
+					
+			  <p>
+				<label for="body-mount-pch-selector"class="body_frf_file_type">Body FRF file type: </label>		  
+				<input type="radio" id="BF_BodySideFileType_punch" name="BF_BodySideFileType" value="punch_file">
+				<label class="PUNCH-files" >PUNCH</label>
+				<input type="radio" id="BF_BodySideFileType_csv" name="BF_BodySideFileType" value="csv_file" checked>
+				<label >CSV</label>
+			  </p>	
+
+			  
+			  <p>
+				<label for="BF_body-mount-pch-selector" class="body_frf_file_type">Body FRF file: </label>
+				<button class="image-button" onclick="selectFiles('BF_body-mount-pch-selector')">
+				  <img src="./static/img/open.gif" alt="open">
+				</button>
+				<input type="file" id="BF_body-mount-pch-selector" onchange="displaySelectedFiles(this, 'BF_txt-body-mount-pch-selector')" multiple accept="">
+				<select type="text" id="BF_txt-body-mount-pch-selector" readOnly></select>
+				
+				<label for="BF_txt-body-mount-ids" class="lbl-input-ids">Body mount node ids: </label>
+				<input type="text" id="BF_txt-body-mount-ids" class="BF_txt-mount-input-ids txt-long-input" value="1000, 1001, 1002" >
+				
+
+
+			  
+			  </p>
+
+			  <p>
+				<label for="BF_avl-mount-selector" class="body_frf_file_type">Engine mount Force file(csv): </label>
+				<button class="image-button" onclick="selectFiles('BF_avl-mount-selector')">
+				  <img src="./static/img/open.gif" alt="open">
+				</button>
+				<input type="file" id="BF_avl-mount-selector" onchange="displaySelectedFiles(this, 'BF_txt_cbx-avl-mount-selector')" multiple accept=".csv">
+				<select type="text" id="BF_txt_cbx-avl-mount-selector" readOnly></select>
+
+				<label for="txt-response-id" class="lbl-input-ids"> Acoustic output node ids: </label>
+				<input type="text" id="BF_txt-response-id" class="BF_txt-mount-input-ids txt-long-input" value="2001, 2002, 2003" onchange="validateInputNidsRealTime($(this), false)">
+				
+				<label for="txt-response-id" class="lbl-input-ids"> Body output node ids: </label>
+				<input type="text" id="BF_txt-body-response-id" class="BF_txt-mount-input-ids txt-long-input" value="10000, 10001, 10002" onchange="validateInputNidsRealTime($(this), false)">
+							
+
+			  <p>
+			  <a window="blank" onclick="createDB_BlockedForce()" class="button" id="btn-createDB-BlockedForce">Calculate</a>
+		  
+			  </p>
+
+		  </div>
+		  <button type="button" class="collapsible">Post Processing</button>
+		  <div id="database-selection" class="default-hide">		  
+		  
+		  
+		  <p>
+            <label class="body_frf_file_type" >Results type: </label>		  
+			<input type="radio" id="BF_ResultType_acoustic" name="resultType" value="yes" onclick="dBA_Octave_Display_Yesno(true)" checked>
+			<label id="BF_ResultType_acoustic_label" class="PUNCH-files" >Acoustic </label>
+			<input type="radio" id="BF_ResultType_structure" name="resultType" value="no" onclick="dBA_Octave_Display_Yesno(false)" >
+			<label id="BF_ResultType_structure_label">Structure </label>
+				
+		  </p>	
+
+          <p>
+            <label for="body-mount-pch-selector" class="body_frf_file_type">Select sensor NID: </label>
+
+            <select type="file" name="cbx-microphone-id_2" id="cbx-microphone-id_2" readOnly onchange="update_graph_BlockedForce()"></select>
+            <label >                     </label>
+			
+			<input type="radio" id="result_Mag" name="result_type" value="result_Mag"  onchange="update_graph_BlockedForce()" checked>	
+			<label class="lbl-model-name">Magnitude</label>
+
+			<input type="radio" id="result_dB" name="result_type" value="result_dB"  onchange="update_graph_BlockedForce()" >				
+			<label class="lbl-model-name">dB</label>
+  			
+			<input type="radio" id="result_dBA" name="result_type" value="result_dBA"  onchange="update_graph_BlockedForce()">			  
+			<label id="result_dBA_label" class="lbl-model-name">dBA</label>	
+
+			<input type="radio" id="result_dBA_3rd-Octave" name="result_type" value="result_dBA_3rd-Octave"  onchange="update_graph_BlockedForce()">			  
+			<label id="result_dBA_3rd-Octave_label" class="lbl-model-name">dBA_1/3Octave</label>					
+		  </p>	
+
+
+          <p>
+            <label for="body-mount-pch-selector" class="body_frf_file_type">Freq Interval: </label>
+            <input type="text" id="txt-df_2" class="txt-df_2" value="6.25" onchange="updateGraphRealTimeByFreqInterval_BF($(this))">
+            <label >                     </label>
+            <a window="blank" onclick="export_csv()" class="button" >Export</a>		
+            <a window="blank" id="Export_Acoustic_button" onclick="export_csv_allAcousticNode()" class="button" >Export all Acoustic node</a>	
+            <a window="blank" id="Export_Body_button" onclick="export_csv_allBodyNode()" class="button" >Export all Body node</a>					
+            <a window="blank" onclick="initGraph_BlockedForce()" class="button" id="btn-bf_clear_all">Clear all</a>				
+		  </p>	
+          <p>
+            <label for="body-mount-pch-selector" class="body_frf_file_type">Ref. pressure: </label>
+            <input type="text" id="bf_txt-ref-pres" class="txt-df_2" value="2e-11" onchange="updateGraphRealTimeByFreqInterval_BF($(this))">
+		  </p>	
+          <p>
+            <label for="body-mount-pch-selector" class="body_frf_file_type">Ref. Accel.: </label>
+            <input type="text" id="bf_txt-ref-acce"  class="txt-df_2" value="1e-3" onchange="updateGraphRealTimeByFreqInterval_BF($(this))">
+		  </p>			  
+
+          <div id="chart_2"></div>
+          </div>	
+        </div> <!--DIV DATABASE BUILDER-->		
+		      
+      </div> <!--DIV LEFT PANEL-->
+
+
+
+
+		
+      </div>
+      <div id="right-panel">
+        <div class="top-right-container">
+          <div class="top-right-button-container">
+            <div class="result-selector-toggle-button">
+              <button type="button" class="collapsible-group">Result Display</button>
+            </div>
+            <div class="utility-toggle-button">
+              <button type="button" class="collapsible-group has-symbol">Utilities</button>
+            </div>
+          </div>
+          <div class="top-right-sub-container">
+            <div class="result-selector-container">
+              <p>
+                <label for="cbx-rpm-selector">Engine Rotation: </label>
+                <select name="cbx-rpm-selector" id="cbx-rpm-selector" readOnly onchange="updateGraph()"></select>
+              </p>
+              <p>
+                <input type="radio" id="full-sensitivity" name="result-selector" value="full-sensitivity" onchange="updateGraph()" checked>
+                <label for="full-sensitivity">Full/Sensitivity</label>
+              </p>
+              <p>
+                <input type="radio" id="single-mount" name="result-selector" value="single-mount" onchange="updateGraph()">
+                <label for="single-mount">Single Mount</label>
+              </p>
+              <p>
+                <input type="radio" id="transfer-path" name="result-selector" value="transfer-path" onchange="updateGraph()">
+                <label for="transfer-path">TPA</label>
+              </p>
+            </div>
+              
+            <div class="utility-container">
+              <p>
+                <label for="chart-height">Chart height</label>  
+                <input type="range" min="-1" max="1" value="0" step="1" class="chart-height-slider" id="chart-height" onchange="updateGraph()">
+              </p>
+              <p>
+                <input type="checkbox" id="show-history" onchange="updateGraph()">
+                <label for="show-history">Show history</label>
+                <input type="checkbox" id="show-db" onchange="updateGraph()" checked>
+                <label for="show-db">dB</label>
+                {% if userclass == "admin" %}
+                  <input type="checkbox" id="no-rot" onchange="updateGraph()">
+                  <label for="no-rot">No rot</label>
+                {% endif %}
+              </p>
+              <p>
+                <input type="checkbox" id="a-weight" onchange="updateGraph()">
+                <label for="a-weight">A-Weight</label>
+                <input type="checkbox" id="oct3rd" onchange="updateGraph()">
+                <label for="oct3rd">3rd-Octave</label>
+              </p>
+              <p>
+                <a window="blank" onclick="showHistoryNameInputDialog()" class="button" id="btn-add-history">Add History</a>
+                <a window="blank" onclick="downloadCsv($(this))" class="button" id="btn-download-csv">Export Csv</a>
+
+              </p>
+            </div>
+          </div> <!-- DIV top-right-sub-container -->
+        </div> <!-- DIV top-right container -->
+
+
+
+
+
+        <div class="bottom-right-container">
+          <button type="button" class="collapsible" math-term-group-id="AVLAcc">Mount Accel. By EXCITE</button>
+          <div id="mount-avl" class="tuning-slider-set"></div>
+            
+          <button type="button" class="collapsible" math-term-group-id="enMount">Engine-side Mounts</button>
+          <div id="engine-side-mount" class="tuning-slider-set"></div>
+            
+          <button type="button" class="collapsible" math-term-group-id="mountK">Mount Stiffness</button>
+          <div id="mount-stiffness" class="tuning-slider-set"></div>
+
+          <button type="button" class="collapsible" math-term-group-id="bodyMount">Body-side Mounts</button>
+          <div id="body-side-mount" class="tuning-slider-set"></div>
+
+          <button type="button" class="collapsible" math-term-group-id="bodyTarget">Body-Target Mounts</button>
+          <div id="body-target" class="tuning-slider-set"></div>
+
+          <datalist id="values">
+          {%for idx in range(11)%}
+            <option value="{{idx*10 - 50}}" label="i*10 - 50"></option>
+          {%endfor%}
+          </datalist>
+        </div> <!-- DIV bottom-right-container -->
+        <span>
+          <a window="blank" onclick="downloadMiscData('rf', $(this))" class="button" id="btn-download-rf">Export IForce</a>
+          {% if userclass == "admin" %}
+            <a window="blank" onclick="downloadMiscData('accel', $(this))" class="button" id="btn-download-true-accel">Export Syn. Accel.</a>
+          {% endif %}
+          <a window="blank" onclick="downloadWaterfall('plt', $(this))" class="button" id="btn-download-plt">Waterfall (plt)</a>
+          <a window="blank" onclick="downloadWaterfall('csv', $(this))" class="button" id="btn-download-csv">Waterfall (csv)</a>
+        </span>
+      </div> <!-- DIV righ-panel-->
+    </div> <!--END DIV MAIN -->
+	
+    <div class="dialog-overlay">
+    </div>
+	
+
+
+
+		
+    <div class="dialog-box input-dialog">
+      <div class="title-bar">
+        <div class="title-intro">NOTE</div>
+        <div class="title-intro"> Please wait ....</div>
+      </div>
+
+      <div class="dialog-button-wrap">
+        <button type="button" id="dlg-btn-add-hist" class="confirm-btn" onclick="addHistory()">Add</button>
+        <button type="button" class="cancel-btn" onclick="closeHistoryNameInputDialog()">Cancel</button>
+      </div>
+    </div> 
+	
+	
+    <div class="dialog-box yesno-dialog">
+      <div class="title-bar">
+        <div class="title-intro">CLEAR THE DATABASE</div>
+        <div class="title-intro">The database will be cleared. If you haven't backed up it. You may lose the data. Do it anyway?</div>
+      </div>
+      <div class="dialog-button-wrap">
+        <button type="button" id="dlg-btn-yes" class="confirm-btn" onclick="clearDB()">Yes</button>
+        <button type="button" class="cancel-btn" onclick="closeClearDBConfirmationDialog()">No</button>
+      </div>
+    </div>	
+
+  </body>
+  
+  <script scr="text/javascript">
+    let NUM_MOUNTS = {{num_mounts}};
+    let BUILDER_NUM_MOUNTS = 3;
+    let FLEX_MOUNT_IDXS = {{flex_mount_idxs}};
+	
+  </script>
+
+
+
+ 
+  <script src="./static/script.js"></script>		
+  
+  <script type="text/javascript">
+    $(document).ready(function(){
+      $('.dialog-overlay').hide();
+      $('.dialog-box').hide();
+    });
+    
+    insertMountPanels();
+    
+    bindEvents();
+
+    fillMountIds();
+    
+    initGraph();
+
+
+  </script>
+</html>
